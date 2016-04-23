@@ -1,0 +1,35 @@
+#!/bin/bash
+# Prepares a changelog file
+
+if [ $# -ne 4 ]; then
+    echo "Error!"
+    echo "Expected arguments: cc-version [mc-version] [cc-version] [previous-version] [current-version]"
+    exit 1
+fi
+
+mcversion=$1
+ccversion=$2
+prev=$mcversion-$3
+curr=$4
+
+file="resources/changelog/$mcversion-$curr.txt"
+
+if [ -f $file ]; then
+    echo "Error!"
+    echo "$file already exists!"
+    exit 1
+fi
+
+touch $file
+echo "As always, don't forget to backup your world before updating!" >> $file
+echo "Requires CyclopsCore version $ccversion." >> $file
+echo "" >> $file
+echo "Additions:" >> $file
+echo "" >> $file
+echo "Changes:" >> $file
+echo "" >> $file
+echo "Fixes:" >> $file
+
+echo "----- TODO: arrange -----" >> $file
+git log --no-merges --format="* %B" $prev..HEAD >> $file
+

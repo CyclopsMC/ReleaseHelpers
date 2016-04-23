@@ -1,0 +1,81 @@
+#!/bin/bash
+# Pushes a version to the release branch and tag it to trigger a curseforge release
+
+if [ $# -ne 3 ]; then
+    echo "Error!"
+    echo "Expected: cc-release [branch-suffix] [mc-version] [mod-version]"
+    exit 1;
+fi
+
+branchsuffix=$1
+masterbranch=master-$branchsuffix
+releasebranch=release-$branchsuffix
+mcversion=$2
+modversion=$3
+tag=$mcversion-$modversion
+
+# Check if master and release branches exist!
+git rev-parse --verify $masterbranch > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Error: Branch $masterbranch does not exist!"
+    exit 1;
+fi
+
+git rev-parse --verify $releasebranch > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Error: Branch $releasebranch does not exist!"
+    exit 1;
+fi
+
+# Check if tag does not exist yet
+git rev-parse --verify $tag > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Error: Tag $tag already exists!"
+    exit 1;
+fi
+
+# Prepare release branch
+echo "Preparing release branch..."
+git checkout $releasebranch
+git merge $masterbranch
+
+# Check if the changelog is present
+echo "Checking changelog..."
+changelog="resources/changelog/$tag.txt"
+git ls-files $changelog --error-unmatch > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Error: Could not find changelog at $changelog in git"
+    exit 1
+fi
+
+# Halt if we have merge conflicts
+if [[ $(git ls-files -u) ]]; then
+    echo "Error: There were merge conflicts, please resolve them and retry later."
+    exit 1;
+fi
+
+# Tag
+read -p "Apply tag '$tag' ? (y/n) " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Execution stopped."
+    exit 1;
+fi
+echo "Tagging..."
+git tag $tag
+
+# Push
+read -p "Push '$tag', '$masterbranch' and '$releasebranch' to origin ? (y/n) " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Execution stopped."
+    exit 1;
+fi
+echo "Pushing tag and branches..."
+git push origin $tag
+git push origin $masterbranch
+git push origin $releasebranch
+
+git checkout $masterbranch
+
+echo "Done!"
