@@ -26,7 +26,7 @@ case $name in
     minecraft)
         echo $minecraft_version
         ;;
-    branch-prefix)
+    branch-suffix)
         echo $minecraft_version | sed "s/^\([0-9]*\)\.\([0-9]*\).*$/\1\.\2/"
         ;;
     forge)
@@ -37,7 +37,7 @@ case $name in
         ;;
     *)
         echo "Can't find param $name"
-        echo "All params: mod, minecraft, branch-prefix, forge, cyclops"
+        echo "All params: mod, minecraft, branch-suffix, forge, cyclops"
         exit 1
         ;;
 esac

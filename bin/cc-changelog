@@ -1,16 +1,18 @@
 #!/bin/bash
-# Prepares a changelog file
+# Bumps a version and prepares the changelog file
 
-if [ $# -ne 4 ]; then
+if [ $# -ne 1 ]; then
     echo "Error!"
-    echo "Expected arguments: cc-version [mc-version] [cc-version] [previous-version] [current-version]"
+    echo "Expected arguments: cc-changelog [major|minor|patch]"
     exit 1
 fi
 
-mcversion=$1
-ccversion=$2
-prev=$mcversion-$3
-curr=$4
+type=$1
+mcversion=$(cc-param minecraft)
+ccversion=$(cc-param cyclops)
+prev=$mcversion-$(cc-param mod)
+cc-bump $type
+curr=$(cc-param mod)
 
 file="resources/changelog/$mcversion-$curr.txt"
 

@@ -1,17 +1,17 @@
 #!/bin/bash
 # Pushes a version to the release branch and tag it to trigger a curseforge release
 
-if [ $# -ne 3 ]; then
+if [ $# -ne 0 ]; then
     echo "Error!"
-    echo "Expected: cc-release [branch-suffix] [mc-version] [mod-version]"
+    echo "Expected: cc-release"
     exit 1;
 fi
 
-branchsuffix=$1
+branchsuffix=$(cc-param branch-suffix)
 masterbranch=master-$branchsuffix
 releasebranch=release-$branchsuffix
-mcversion=$2
-modversion=$3
+mcversion=$(cc-param minecraft)
+modversion=$(cc-param mod)
 tag=$mcversion-$modversion
 
 # Check if master and release branches exist!
