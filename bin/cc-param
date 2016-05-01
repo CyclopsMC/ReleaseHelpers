@@ -1,0 +1,43 @@
+#!/bin/bash
+# Get a parameter
+
+if [ $# -ne 1 ]; then
+    echo "Error!"
+    echo "Expected arguments: cc-version [param-name]"
+    exit 1
+fi
+
+name=$1
+
+file="build.properties"
+
+if [ ! -f $file ]; then
+    echo "Error!"
+    echo "Can't find $file!"
+    exit 1
+fi
+
+. $file
+
+case $name in
+    mod)
+        echo $mod_version
+        ;;
+    minecraft)
+        echo $minecraft_version
+        ;;
+    branch-prefix)
+        echo $minecraft_version | sed "s/^\([0-9]*\)\.\([0-9]*\).*$/\1\.\2/"
+        ;;
+    forge)
+        echo $forge_version
+        ;;
+    cyclops)
+        echo $cyclopscore_version | sed "s/^\(.*\)-.*$/\1/"
+        ;;
+    *)
+        echo "Can't find param $name"
+        echo "All params: mod, minecraft, branch-prefix, forge, cyclops"
+        exit 1
+        ;;
+esac
