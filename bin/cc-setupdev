@@ -1,0 +1,4 @@
+#!/bin/bash
+# Setup decomp workspace and idea
+./gradlew setupDecompWorkspace idea
+
