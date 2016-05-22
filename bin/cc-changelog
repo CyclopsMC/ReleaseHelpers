@@ -24,7 +24,7 @@ fi
 
 touch $file
 echo "As always, don't forget to backup your world before updating!" >> $file
-if [ $ccversion != "" ]; then
+if [ "$ccversion" != "" ]; then
     echo "Requires CyclopsCore version $ccversion." >> $file
 fi
 echo "" >> $file
