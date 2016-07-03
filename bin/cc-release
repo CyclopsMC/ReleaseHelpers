@@ -62,7 +62,7 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 1;
 fi
 echo "Tagging..."
-git tag -s $tag
+git tag -s $tag -m "Release $tag"
 
 # Push
 read -p "Push '$tag', '$masterbranch' and '$releasebranch' to origin ? (y/n) " -n 1 -r
