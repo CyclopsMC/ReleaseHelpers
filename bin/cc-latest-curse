@@ -1,0 +1,54 @@
+#!/usr/bin/env node
+// Get the latest mod version and download url given the modname, modid and minecraft version
+
+var http = require('http');
+var downloadtemplate = "http://minecraft.curseforge.com/projects/__MODNAME__/files/__DOWNLOADID__/download";
+var widgettemplate1 = "/mc-mods/minecraft/__MODID__-__MODNAME__.json"
+var widgettemplate2 = "/mc-mods/minecraft/__MODNAME__.json"
+
+function getlatest(modname, modid, mcversion, cb) {
+    getlatestforurl([widgettemplate1, widgettemplate2], modname, modid, mcversion, cb);
+}
+
+function getlatestforurl(widgettemplates, modname, modid, mcversion, cb) {
+    http.get({
+        host: 'widget.mcf.li',
+        path: widgettemplates[0].replace("__MODNAME__", modname).replace("__MODID__", modid)
+    }, function(response) {
+        var body = '';
+        response.on('data', function(d) {
+            body += d;
+        });
+        response.on('error', function(e) {
+            console.log(e);
+        });
+        response.on('end', function() {
+            var parsed = JSON.parse(body);
+            if (parsed.code && parsed.code === "404") {
+                if (widgettemplates.length > 1) {
+                    widgettemplates.shift()
+                    getlatestforurl(widgettemplates, modname, modid, mcversion, cb);
+                } else {
+                    console.log("Could not find a valid version for " + modname);
+                    console.log(body);
+                    return 1;
+                }
+            } else {
+                var download = parsed.versions[mcversion][0];
+                var info = getdownloadinfo(modname, download);
+                cb(info);
+            }
+        });
+    });
+}
+
+function getdownloadinfo(modname, download) {
+    var downloadurl = downloadtemplate.replace("__MODNAME__", modname).replace("__DOWNLOADID__", download.id);
+    var modversion = download.name.match(/-(\d+\.\d+\.\d+)\.jar/i)[1];
+    return {
+        downloadurl: downloadurl,
+        modversion: modversion
+    };
+}
+
+module.exports = getlatest;

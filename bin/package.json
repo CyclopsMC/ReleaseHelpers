@@ -1,0 +1,14 @@
+{
+  "name": "cc-helpers",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Ruben Taelman <rubensworks@gmail.com> (http://rubensworks.net)",
+  "license": "MIT",
+  "dependencies": {
+    "prompt": "^1.0.0"
+  }
+}

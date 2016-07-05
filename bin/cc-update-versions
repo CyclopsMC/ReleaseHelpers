@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+// Updates to the latest mod versions
+
+var getlatest = require(__dirname + '/cc-latest-curse');
+var fs = require('fs');
+var spawn = require('child_process').spawn;
+var prompt = require('prompt');
+
+var configfile = fs.readFileSync("mods.json", "utf8");
+var mods = JSON.parse(configfile).mods;
+
+updatemod(0);
+function updatemod(modi) {
+    if (modi < mods.length) {
+        var mod = mods[modi];
+        var versionKeys = Object.keys(mod.versions);
+        updatemodinner(0);
+
+        function updatemodinner(i) {
+            if (i < versionKeys.length) {
+                var virtualVersion = versionKeys[i];
+                var mcversion = mod.versions[virtualVersion];
+                getlatest(mod["curse-name"], mod["curse-id"], mcversion, function(info) {
+                    updatemodfile(mod["file-name"], virtualVersion + "/" + mod["file-name"] + ".txt", info, function() {
+                        updatemodinner(i + 1);
+                    });
+                });
+            } else {
+                setImmediate(function() {
+                    updatemod(modi + 1)
+                });
+            }
+        }
+    }
+}
+
+function updatemodfile(modname, modfilepath, info, cb) {
+    var currentversion;
+    try {
+        currentversion = fs.readFileSync(modfilepath, "utf8").split(/\r?\n/)[0];
+    } catch (e) {
+        currentversion = "NONE";
+    }
+    if (info.modversion !== currentversion) {
+        console.log(modname + " updated from " + currentversion + " to " + info.modversion);
+        prompt.start();
+        prompt.get({
+            properties: {
+                doupdate: {
+                    message: "Do this update? (Will be skipped otherwise)",
+                    required: true,
+                    type: 'boolean',
+                    default: 't'
+                },
+                comment: {
+                    message: "What changed in the update?"
+                }
+            }
+        }, function(e, data) {
+            if(e) return 1;
+            if (data.doupdate) {
+                var comment = data.comment;
+                shorten(info.downloadurl, function(download) {
+                    var filecontents = info.modversion + "\n" + comment + "\n" + download;
+                    fs.writeFile(modfilepath, filecontents, function(e) {
+                        if(e) console.log("Could not save file " + e);
+                        cb();
+                    });
+                });
+            } else {
+                cb();
+            }
+        });
+    } else {
+        cb();
+    }
+}
+
+function shorten(url, cb) {
+    var cmd = spawn('shorten', [url]);
+    var result = '';
+    cmd.stdout.on('data', function(data) {
+        result += data.toString();
+    });
+    cmd.on('close', function() {
+        cb(result);
+    });
+}
+
