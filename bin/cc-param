@@ -10,10 +10,17 @@ fi
 name=$1
 
 file="build.properties"
+modpropfile="src/main/resources/mcmod.info"
 
 if [ ! -f $file ]; then
     echo "Error!"
     echo "Can't find $file!"
+    exit 1
+fi
+
+if [ ! -f $modpropfile ]; then
+    echo "Error!"
+    echo "Can't find $modpropfile!"
     exit 1
 fi
 
@@ -35,9 +42,12 @@ case $name in
     cyclops)
         echo $cyclopscore_version | sed "s/^\(.*\)-.*$/\1/"
         ;;
+    modid)
+        gsed -n -e "s/^.*\"modid\": \"\([a-z]*\)\".*$/\1/p" $modpropfile
+        ;;
     *)
         echo "Can't find param $name"
-        echo "All params: mod, minecraft, branch-suffix, forge, cyclops"
+        echo "All params: mod, minecraft, branch-suffix, forge, cyclops, modid"
         exit 1
         ;;
 esac
