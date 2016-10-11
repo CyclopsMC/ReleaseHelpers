@@ -39,5 +39,5 @@ case "$type" in
         exit 1
 esac
 new=$cmajor.$cminor.$cpatch
-gsed -i "s/^mod_version=.*$/mod_version=$new/" build.properties
+cc-param-set mod_version $new
 

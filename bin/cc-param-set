@@ -1,0 +1,27 @@
+#!/bin/bash
+# Set a build file property
+
+if [ $# -ne 2 ]; then
+    echo "Error!"
+    echo "Expected: cc-param-set <key> <value>"
+    exit 1;
+fi
+
+type=$1
+
+file="build.properties"
+
+if [ ! -f $file ]; then
+    echo "Error!"
+    echo "Can't find $file!"
+    exit 1
+fi
+
+if ! grep -q "^$1=" $file; then
+    echo "Error!"
+    echo "The parameter '$1' does not exist in $file"
+    exit 1;
+fi
+
+gsed -i "s/^$1=.*$/$1=$2/" build.properties
+
