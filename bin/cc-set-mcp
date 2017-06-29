@@ -1,0 +1,13 @@
+#!/bin/bash
+# Update MCP version information for the current mod
+
+if [ $# -ne 1 ]; then
+    echo "Error!"
+    echo "Expected: $0 <mcp-version>"
+    exit 1;
+fi
+
+version=$1
+
+cc-param-set mcp_mappings_version $version
+
