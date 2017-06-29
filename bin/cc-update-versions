@@ -21,7 +21,7 @@ function updatemod(modi) {
                 var virtualVersion = versionKeys[i];
                 var mcversion = mod.versions[virtualVersion];
                 getlatest(mod["curse-name"], mod["curse-id"], mcversion, function(info) {
-                    updatemodfile(mod["file-name"], virtualVersion + "/" + mod["file-name"] + ".txt", info, function() {
+                    updatemodfile(mcversion, mod["file-name"], virtualVersion + "/" + mod["file-name"] + ".txt", info, function() {
                         updatemodinner(i + 1);
                     });
                 });
@@ -34,7 +34,7 @@ function updatemod(modi) {
     }
 }
 
-function updatemodfile(modname, modfilepath, info, cb) {
+function updatemodfile(mcversion, modname, modfilepath, info, cb) {
     var currentversion;
     try {
         currentversion = fs.readFileSync(modfilepath, "utf8").split(/\r?\n/)[0];
@@ -42,7 +42,7 @@ function updatemodfile(modname, modfilepath, info, cb) {
         currentversion = "NONE";
     }
     if (info.modversion !== currentversion) {
-        console.log(modname + " updated from " + currentversion + " to " + info.modversion);
+        console.log(modname + " updated from " + currentversion + " to " + info.modversion + ' (' + mcversion + ')');
         prompt.start();
         prompt.get({
             properties: {
@@ -50,7 +50,7 @@ function updatemodfile(modname, modfilepath, info, cb) {
                     message: "Do this update? (Will be skipped otherwise)",
                     required: true,
                     type: 'boolean',
-                    default: 't'
+                    default: true
                 },
                 comment: {
                     message: "What changed in the update?"
