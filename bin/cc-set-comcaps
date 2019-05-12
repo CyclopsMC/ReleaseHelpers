@@ -1,0 +1,17 @@
+#!/bin/bash
+# Update commoncapabilities version information for the current mod
+
+if [ $# -ne 2 ]; then
+    echo "Error!"
+    echo "Expected: $0 <commoncapabilities-version-base> <commoncapabilities-build-number>"
+    exit 1;
+fi
+
+v_base=$1
+v_build=$2
+mc=$(cc-param minecraft)
+
+cc-param-set commoncapabilities_version $mc-$v_base-$v_build
+cc-gradle-set commoncapabilities_version_local $mc-$v_base-DEV
+cc-reference-set MOD_COMMONCAPABILITIES_VERSION_MIN $v_base
+
