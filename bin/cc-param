@@ -11,6 +11,7 @@ name=$1
 
 file="build.properties"
 modpropfile="src/main/resources/mcmod.info"
+modpropfile2="src/main/resources/META-INF/mods.toml"
 
 if [ ! -f $file ]; then
     echo "Error!"
@@ -18,9 +19,9 @@ if [ ! -f $file ]; then
     exit 1
 fi
 
-if [ ! -f $modpropfile ]; then
+if [ ! -f $modpropfile ] && [ ! -f $modpropfile2 ]; then
     echo "Error!"
-    echo "Can't find $modpropfile!"
+    echo "Can't find $modpropfile or $modpropfile2!"
     exit 1
 fi
 
@@ -43,7 +44,11 @@ case $name in
         echo $cyclopscore_version | sed "s/^\(.*\)-.*$/\1/"
         ;;
     modid)
-        gsed -n -e "s/^.*\"modid\": \"\([a-z]*\)\".*$/\1/p" $modpropfile
+        if [ ! -f $modpropfile ]; then
+            gsed -n -e "s/^modId=\"\([a-z]*\)\".*$/\1/p" $modpropfile2
+        else
+            gsed -n -e "s/^.*\"modid\": \"\([a-z]*\)\".*$/\1/p" $modpropfile
+        fi
         ;;
     *)
         echo "Can't find param $name"
