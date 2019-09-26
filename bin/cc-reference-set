@@ -19,9 +19,8 @@ if [ ! -f $file ]; then
 fi
 
 if ! grep -q "public static final String $1" $file; then
-    echo "Error!"
-    echo "The parameter '$1' does not exist in $file"
-    exit 1;
+    echo "Warning: The parameter '$1' does not exist in $file (running in pre-1.14?)"
+    exit 0;
 fi
 
 gsed -i "s/$1 *= *\"[^\"]*\";/$1 = \"$2\";/" $file
