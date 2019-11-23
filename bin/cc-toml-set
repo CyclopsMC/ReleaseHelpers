@@ -10,8 +10,8 @@ fi
 file="src/main/resources/META-INF/mods.toml"
 
 if [ ! -f $file ]; then
-    echo "Error!"
-    echo "Can't find $file!"
+    echo "Warning!"
+    echo "Can't find $file! (can be ignored in 1.12)"
     exit 1
 fi
 
