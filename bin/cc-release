@@ -55,22 +55,10 @@ if [[ $(git ls-files -u) ]]; then
 fi
 
 # Tag
-read -p "Apply tag '$tag' ? (y/n) " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Execution stopped."
-    exit 1;
-fi
 echo "Tagging..."
 git tag -s $tag -m "Release $tag"
 
 # Push
-read -p "Push '$tag', '$masterbranch' and '$releasebranch' to origin ? (y/n) " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Execution stopped."
-    exit 1;
-fi
 echo "Pushing tag and branches..."
 git push origin $tag
 git push origin $masterbranch
