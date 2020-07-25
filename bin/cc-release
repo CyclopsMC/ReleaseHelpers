@@ -7,6 +7,16 @@ if [ $# -ne 0 ]; then
     exit 1;
 fi
 
+# If we have unstaged files, confirm the changelog
+git diff-index --quiet HEAD -- > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Confirming changelog in a commit..."
+    cc-changelog-confirm
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
+fi
+
 branchsuffix=$(cc-param branch-suffix)
 masterbranch=master-$branchsuffix
 releasebranch=release-$branchsuffix

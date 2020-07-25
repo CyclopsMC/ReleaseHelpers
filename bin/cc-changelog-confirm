@@ -1,0 +1,23 @@
+#!/bin/bash
+# Confirms the changelog and commits it
+
+if [ $# -ne 0 ]; then
+    echo "Error!"
+    echo "Expected: cc-changelog-confirm"
+    exit 1;
+fi
+
+mcversion=$(cc-param minecraft)
+curr=$(cc-param mod)
+file="resources/changelog/$mcversion-$curr.txt"
+
+git add build.properties $file
+
+if [[ $(git diff) ]]; then
+    echo "Error: Unstaged files were detected."
+    git status
+    exit 1
+fi
+
+git commit -m "Bump mod version"
+
