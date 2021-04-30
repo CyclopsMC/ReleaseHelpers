@@ -37,3 +37,5 @@ echo "Fixes:" >> $file
 echo "----- TODO: arrange -----" >> $file
 git log --no-merges --format="* %B" $prev..HEAD >> $file
 
+open $file
+

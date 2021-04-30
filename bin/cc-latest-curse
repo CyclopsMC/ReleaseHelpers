@@ -12,7 +12,7 @@ function getlatest(modname, modid, mcversion, cb) {
 
 function getlatestforurl(widgettemplates, modname, modid, mcversion, cb) {
     http.get({
-        host: 'widget.mcf.li',
+        host: 'api.cfwidget.com',
         path: widgettemplates[0].replace("__MODNAME__", modname).replace("__MODID__", modid)
     }, function(response) {
         var body = '';
