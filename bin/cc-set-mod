@@ -1,0 +1,20 @@
+#!/bin/bash
+# Update a mod's version information for the current mod
+
+if [ $# -ne 3 ]; then
+    echo "Error!"
+    echo "Expected: $0 <mod-id> <mod-version-base> <mod-build-number>"
+    exit 1;
+fi
+
+mod=$1
+mod_upper=$(echo $mod | tr [:lower:] [:upper:])
+v_base=$2
+v_build=$3
+mc=$(cc-param minecraft)
+
+cc-param-set ${mod}_version $mc-$v_base-$v_build
+cc-gradle-set ${mod}_version_local $mc-$v_base-DEV
+cc-reference-set MOD_${mod_upper}_VERSION_MIN $v_base
+cc-toml-set $mod versionRange "[$v_base,)"
+
