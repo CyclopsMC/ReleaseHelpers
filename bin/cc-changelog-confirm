@@ -11,7 +11,13 @@ mcversion=$(cc-param minecraft)
 curr=$(cc-param mod)
 file="resources/changelog/$mcversion-$curr.txt"
 
-git add build.properties $file
+if [ -f "secrets.properties" ]; then
+  propsfile="gradle.properties"
+else
+  propsfile="build.properties"
+fi
+
+git add $propsfile $file
 
 if [[ $(git diff) ]]; then
     echo "Error: Unstaged files were detected."

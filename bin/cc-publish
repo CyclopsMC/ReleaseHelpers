@@ -1,4 +1,7 @@
 #!/bin/bash
-# Setup decomp workspace and idea
-./gradlew uploadArchives --offline
+if [ ! -f "secrets.properties" ]; then
+  ./gradlew uploadArchives --offline
+else
+  ./gradlew publishToMavenLocal
+fi
 

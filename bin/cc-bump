@@ -9,7 +9,11 @@ fi
 
 type=$1
 
-file="build.properties"
+if [ -f "secrets.properties" ]; then
+  file="gradle.properties"
+else
+  file="build.properties"
+fi
 
 if [ ! -f $file ]; then
     echo "Error!"
