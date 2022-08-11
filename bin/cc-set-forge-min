@@ -8,7 +8,10 @@ if [ $# -ne 1 ]; then
 fi
 
 version=$1
+v_major=$(echo $version | sed "s/^\([0-9]*\)\..*$/\1/")
 
 cc-param-set forge_version $version
 cc-reference-set MOD_FORGE_VERSION_MIN $version
+cc-toml-set forge versionRange "[$version,)"
+cc-toml-set loaderVersion loaderVersion "[$v_major,)"
 

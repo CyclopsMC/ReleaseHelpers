@@ -1,0 +1,13 @@
+#!/bin/bash
+# Update a mod's minecraft information
+
+if [ $# -ne 1 ]; then
+    echo "Error!"
+    echo "Expected: $0 <mc-version>"
+    exit 1;
+fi
+
+v=$1
+
+cc-param-set minecraft_version $v
+cc-toml-set minecraft versionRange "[$v,]"
