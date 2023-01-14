@@ -1,0 +1,30 @@
+#!/bin/bash
+# Generate the minecraft/atlases/blocks.json file based on all available textures of the current mod.
+# Run this from the root of the mod's repo.
+
+modId=$(cc-param modid)
+dir="src/main/resources/assets/$modId/textures"
+target="src/main/resources/assets/minecraft/atlases/blocks.json"
+targetchars=${#target}
+
+echo -n "{ \"sources\": [" > $target
+first="true"
+for file in $(find "$dir" -type f -name "*.png"); do
+	len=$(echo "${#file}-4" | bc)
+	path=$(echo $file | cut -c $targetchars-$len)
+	
+	if [[ "$path" =~ ^gui.* ]]; then
+		continue
+	fi
+	
+	if [[ $first == "true" ]] ; then
+		echo "" >> $target
+	else
+		echo "," >> $target
+	fi
+	
+	echo -n "  { \"type\": \"minecraft:single\", \"resource\": \"$modId:$path\" }" >> $target
+	first="false"
+done
+echo "" >> $target
+echo "]}" >> $target
