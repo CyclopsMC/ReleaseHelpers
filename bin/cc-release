@@ -45,9 +45,9 @@ if [ $? -eq 0 ]; then
 fi
 
 # Prepare release branch
-echo "Preparing release branch..."
-git checkout $releasebranch
-git merge $masterbranch
+#echo "Preparing release branch..."
+#git checkout $releasebranch
+#git merge $masterbranch
 
 # Check if the changelog is present
 echo "Checking changelog..."
@@ -72,7 +72,7 @@ git tag -s $tag -m "Release $tag"
 echo "Pushing tag and branches..."
 git push origin $tag
 git push origin $masterbranch
-git push origin $releasebranch
+#git push origin $releasebranch
 
 git checkout $masterbranch
 
