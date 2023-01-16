@@ -3,7 +3,7 @@
 
 if [ $# -ne 1 ]; then
     echo "Error!"
-    echo "Expected arguments: cc-changelog [major|minor|patch]"
+    echo "Expected arguments: cc-changelog [major|minor|patch|init]"
     exit 1
 fi
 
@@ -11,7 +11,9 @@ type=$1
 mcversion=$(cc-param minecraft)
 ccversion=$(cc-param cyclops)
 prev=$mcversion-$(cc-param mod)
-cc-bump $type
+if [[ "$type" != "init" ]]; then
+    cc-bump $type
+fi
 curr=$(cc-param mod)
 
 file="resources/changelog/$mcversion-$curr.txt"
@@ -27,15 +29,22 @@ echo "As always, don't forget to backup your world before updating!" >> $file
 if [ "$ccversion" != "" ]; then
     echo "Requires CyclopsCore version $ccversion or higher." >> $file
 fi
-echo "" >> $file
-echo "Additions:" >> $file
-echo "" >> $file
-echo "Changes:" >> $file
-echo "" >> $file
-echo "Fixes:" >> $file
 
-echo "----- TODO: arrange -----" >> $file
+if [[ "$type" == "init" ]]; then
+    echo "" >> $file
+    echo "Initial $mcversion release" >> $file
+else
+    echo "" >> $file
+    echo "Additions:" >> $file
+    echo "" >> $file
+    echo "Changes:" >> $file
+    echo "" >> $file
+    echo "Fixes:" >> $file
+
+    echo "----- TODO: arrange -----" >> $file
 git log --no-merges --format="* %B" $prev..HEAD >> $file
+fi
+git add $file
 
 open $file
 

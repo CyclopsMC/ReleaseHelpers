@@ -31,11 +31,11 @@ if [ $? -ne 0 ]; then
     exit 1;
 fi
 
-git rev-parse --verify $releasebranch > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "Error: Branch $releasebranch does not exist!"
-    exit 1;
-fi
+#git rev-parse --verify $releasebranch > /dev/null 2>&1
+#if [ $? -ne 0 ]; then
+#    echo "Error: Branch $releasebranch does not exist!"
+#    exit 1;
+#fi
 
 # Check if tag does not exist yet
 git rev-parse --verify $tag > /dev/null 2>&1
