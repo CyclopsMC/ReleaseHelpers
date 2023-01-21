@@ -18,7 +18,7 @@ if [ $? -ne 0 ]; then
 fi
 
 branchsuffix=$(cc-param branch-suffix)
-masterbranch=master-$branchsuffix
+masterbranch=$(git rev-parse --abbrev-ref HEAD)
 releasebranch=release-$branchsuffix
 mcversion=$(cc-param minecraft)
 modversion=$(cc-param mod)
