@@ -1,5 +1,5 @@
 #!/bin/bash
-if [ ! -f "secrets.properties" ]; then
+if [ ! -f "secrets.properties_template" ]; then
   ./gradlew uploadArchives
 else
   ./gradlew publishToMavenLocal

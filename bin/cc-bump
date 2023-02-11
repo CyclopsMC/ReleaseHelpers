@@ -9,7 +9,7 @@ fi
 
 type=$1
 
-if [ -f "secrets.properties" ]; then
+if [ -f "secrets.properties_template" ]; then
   file="gradle.properties"
 else
   file="build.properties"

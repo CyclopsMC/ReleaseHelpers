@@ -11,7 +11,7 @@ mcversion=$(cc-param minecraft)
 curr=$(cc-param mod)
 file="resources/changelog/$mcversion-$curr.txt"
 
-if [ -f "secrets.properties" ]; then
+if [ -f "secrets.properties_template" ]; then
   propsfile="gradle.properties"
 else
   propsfile="build.properties"
