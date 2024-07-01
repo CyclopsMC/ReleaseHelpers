@@ -3,7 +3,7 @@
 
 if [ $# -ne 1 ]; then
     echo "Error!"
-    echo "Expected arguments: cc-version [param-name]"
+    echo "Expected arguments: cc-param [param-name]"
     exit 1
 fi
 
@@ -16,6 +16,7 @@ else
 fi
 modpropfile="src/main/resources/mcmod.info"
 modpropfile2="src/main/resources/META-INF/mods.toml"
+modpropfile3="src/main/resources/META-INF/neoforge.mods.toml"
 
 if [ ! -f $file ]; then
     echo "Error!"
@@ -23,9 +24,9 @@ if [ ! -f $file ]; then
     exit 1
 fi
 
-if [ ! -f $modpropfile ] && [ ! -f $modpropfile2 ]; then
+if [ ! -f $modpropfile ] && [ ! -f $modpropfile2 ] && [ ! -f $modpropfile3 ]; then
     echo "Error!"
-    echo "Can't find $modpropfile or $modpropfile2!"
+    echo "Can't find $modpropfile or $modpropfile2 or $modpropfile3!"
     exit 1
 fi
 
@@ -48,8 +49,10 @@ case $name in
         echo $cyclopscore_version | sed "s/^\(.*\)-.*$/\1/"
         ;;
     modid)
-        if [ ! -f $modpropfile ]; then
+        if [ -f $modpropfile2 ]; then
             gsed -n -e "s/^modId=\"\([a-z]*\)\".*$/\1/p" $modpropfile2
+		elif [ -f $modpropfile3 ]; then
+            gsed -n -e "s/^modId=\"\([a-z]*\)\".*$/\1/p" $modpropfile3
         else
             gsed -n -e "s/^.*\"modid\": \"\([a-z]*\)\".*$/\1/p" $modpropfile
         fi

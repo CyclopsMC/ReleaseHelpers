@@ -8,19 +8,32 @@ if [ $# -ne 3 ]; then
 fi
 
 file="src/main/resources/META-INF/mods.toml"
+file2="src/main/resources/META-INF/neoforge.mods.toml"
 
-if [ ! -f $file ]; then
+if [ ! -f $file ] && [ ! -f $file2 ]; then
     echo "Warning!"
-    echo "Can't find $file! (can be ignored in 1.12)"
+    echo "Can't find $file or $file2! (can be ignored in 1.12)"
     exit 1
 fi
 
-if ! grep -q "$1" $file; then
-    echo "Error!"
-    echo "The string '$1' does not occur in $file"
-    exit 1;
-fi
-line_start=$(grep -n "$1" $file | cut -d':' -f1 | tail -n 1)
-line_end=$(echo "$line_start + 2" | bc)
+if [ -f $file ]; then
+	if ! grep -q "$1" $file; then
+	    echo "Error!"
+	    echo "The string '$1' does not occur in $file"
+	    exit 1;
+	fi
+	line_start=$(grep -n "$1" $file | cut -d':' -f1 | tail -n 1)
+	line_end=$(echo "$line_start + 2" | bc)
 
-gsed -i "$line_start,${line_end}s/$2 *= *\"[^\"]*\"/$2=\"$3\"/" $file
+	gsed -i "$line_start,${line_end}s/$2 *= *\"[^\"]*\"/$2=\"$3\"/" $file
+else
+	if ! grep -q "$1" $file2; then
+	    echo "Error!"
+	    echo "The string '$1' does not occur in $file2"
+	    exit 1;
+	fi
+	line_start=$(grep -n "$1" $file2 | cut -d':' -f1 | tail -n 1)
+	line_end=$(echo "$line_start + 2" | bc)
+
+	gsed -i "$line_start,${line_end}s/$2 *= *\"[^\"]*\"/$2=\"$3\"/" $file2
+fi
