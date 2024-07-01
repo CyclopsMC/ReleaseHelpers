@@ -13,5 +13,5 @@ v_major=$(echo $version | sed "s/^\([0-9]*\)\..*$/\1/")
 cc-param-set neoforge_version $version
 #cc-reference-set MOD_NEOFORGE_VERSION_MIN $version
 cc-toml-set neoforge versionRange "[$version,)"
-cc-toml-set loaderVersion loaderVersion "[$v_major,)"
+cc-toml-set loaderVersion loaderVersion "[2,)"
 
