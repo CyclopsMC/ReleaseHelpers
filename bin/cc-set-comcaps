@@ -11,8 +11,8 @@ v_base=$1
 v_build=$2
 mc=$(cc-param minecraft)
 
-cc-param-set commoncapabilities_version $mc-$v_base-$v_build
-cc-gradle-set commoncapabilities_version_local $mc-$v_base-DEV
+cc-param-set commoncapabilities_version $v_base-$v_build
+cc-gradle-set commoncapabilities_version_local $v_base-DEV
 cc-reference-set MOD_COMMONCAPABILITIES_VERSION_MIN $v_base
 cc-toml-set commoncapabilities versionRange "[$v_base,)"
 
