@@ -13,9 +13,8 @@ modid=$(cc-param modid)
 file="src/main/java/org/cyclops/$modid/Reference.java"
 
 if [ ! -f $file ]; then
-    echo "Error!"
-    echo "Can't find $file!"
-    exit 1
+    echo "Warning: Can't find $file! (running in pre-1.14?)"
+    exit 0
 fi
 
 if ! grep -q "public static final String $1" $file; then

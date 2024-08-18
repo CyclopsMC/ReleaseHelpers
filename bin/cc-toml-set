@@ -12,7 +12,7 @@ file2="src/main/resources/META-INF/neoforge.mods.toml"
 
 if [ ! -f $file ] && [ ! -f $file2 ]; then
     echo "Warning!"
-    echo "Can't find $file or $file2! (can be ignored in 1.12)"
+    echo "Can't find $file or $file2! (can be ignored in 1.12 and multi-loader repo's)"
     exit 1
 fi
 

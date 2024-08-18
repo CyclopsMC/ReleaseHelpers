@@ -12,6 +12,6 @@ v_build=$2
 
 cc-param-set cyclopscore_version $v_base-$v_build
 cc-gradle-set cyclopscore_version_local $v_base-DEV
-cc-reference-set MOD_CYCLOPSCORE_VERSION_MIN $v_base
+#cc-reference-set MOD_CYCLOPSCORE_VERSION_MIN $v_base
 cc-toml-set cyclopscore versionRange "[$v_base,)"
 
