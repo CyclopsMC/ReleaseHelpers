@@ -14,9 +14,6 @@ if [ -f "secrets.properties_template" ]; then
 else
   file="build.properties"
 fi
-modpropfile="src/main/resources/mcmod.info"
-modpropfile2="src/main/resources/META-INF/mods.toml"
-modpropfile3="src/main/resources/META-INF/neoforge.mods.toml"
 
 if [ ! -f $file ]; then
     echo "Error!"
@@ -24,31 +21,40 @@ if [ ! -f $file ]; then
     exit 1
 fi
 
-if [ ! -f $modpropfile ] && [ ! -f $modpropfile2 ] && [ ! -f $modpropfile3 ]; then
-    echo "Error!"
-    echo "Can't find $modpropfile or $modpropfile2 or $modpropfile3!"
-    exit 1
-fi
-
-. $file
+# Reads the value of a property from a properties file.
+#
+# $1 - Key name, matched at beginning of line.
+function prop {
+    grep "^${1}" $file | cut -d'=' -f2
+}
 
 case $name in
     mod)
-        echo $mod_version
+        echo $(prop mod_version)
         ;;
     minecraft)
-        echo $minecraft_version
+        echo $(prop minecraft_version)
         ;;
     branch-suffix)
-        echo $minecraft_version | sed "s/^\([0-9]*\)\.\([0-9]*\).*$/\1\.\2/"
+        echo $(prop minecraft_version) | sed "s/^\([0-9]*\)\.\([0-9]*\).*$/\1\.\2/"
         ;;
     forge)
-        echo $forge_version
+        echo $(prop forge_version)
         ;;
     cyclops)
-        echo $cyclopscore_version | sed "s/^\(.*\)-.*$/\1/"
+        echo $(prop cyclopscore_version) | sed "s/^\(.*\)-.*$/\1/"
         ;;
     modid)
+		modpropfile="src/main/resources/mcmod.info"
+		modpropfile2="src/main/resources/META-INF/mods.toml"
+		modpropfile3="src/main/resources/META-INF/neoforge.mods.toml"
+		
+		if [ ! -f $modpropfile ] && [ ! -f $modpropfile2 ] && [ ! -f $modpropfile3 ]; then
+		    echo "Error!"
+		    echo "Can't find $modpropfile or $modpropfile2 or $modpropfile3!"
+		    exit 1
+		fi
+		
         if [ -f $modpropfile2 ]; then
             gsed -n -e "s/^modId=\"\([a-z]*\)\".*$/\1/p" $modpropfile2
 		elif [ -f $modpropfile3 ]; then
