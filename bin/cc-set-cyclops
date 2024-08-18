@@ -10,6 +10,11 @@ fi
 v_base=$1
 v_build=$2
 
+if [[ "$(basename $(pwd))" == "CyclopsCore" ]]; then
+	echo "Skipping CyclopsCore"
+	exit 0;
+fi
+
 cc-param-set cyclopscore_version $v_base-$v_build
 cc-gradle-set cyclopscore_version_local $v_base-DEV
 #cc-reference-set MOD_CYCLOPSCORE_VERSION_MIN $v_base
