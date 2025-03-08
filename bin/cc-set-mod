@@ -16,5 +16,5 @@ mc=$(cc-param minecraft)
 cc-param-set ${mod}_version $v_base-$v_build
 cc-gradle-set ${mod}_version_local $v_base-DEV
 cc-reference-set MOD_${mod_upper}_VERSION_MIN $v_base
-cc-toml-set $mod versionRange "[$v_base,)"
+#cc-toml-set $mod versionRange "[$v_base,)"
 

@@ -10,4 +10,4 @@ fi
 v=$1
 
 cc-param-set minecraft_version $v
-cc-toml-set minecraft versionRange "[$v,]"
+#cc-toml-set minecraft versionRange "[$v,]"
