@@ -1,0 +1,14 @@
+#!/bin/bash
+# Upmerge from the previous MC version
+
+set -e
+
+if [ ! -f ../.upmerge-src-branch ]; then
+    echo "Error!"
+    echo "Can't find $file!"
+    exit 1
+fi
+
+prevbranch=$(cat ../.upmerge-src-branch)
+git fetch origin $prevbranch
+git merge origin/$prevbranch
