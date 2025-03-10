@@ -1,0 +1,12 @@
+#!/bin/bash
+# Check if the current branch is up-to-date with remote
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+behind_count=$(git rev-list --count HEAD..@{u})
+
+if [ "$behind_count" -gt "0" ]; then
+    echo "Error!"
+    echo "The local branch is running $behind_count commits behind on its remote branch $branch"
+    exit 1
+fi
+

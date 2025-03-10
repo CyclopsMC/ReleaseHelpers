@@ -1,6 +1,9 @@
 #!/bin/bash
 # Bumps a version and prepares the changelog file
 
+set -e
+cc-is-up-to-date
+
 if [ $# -ne 1 ]; then
     echo "Error!"
     echo "Expected arguments: cc-changelog [major|minor|patch|init]"
