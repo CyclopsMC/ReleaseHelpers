@@ -2,7 +2,8 @@
 # Check if the current branch is up-to-date with remote
 
 branch=$(git rev-parse --abbrev-ref HEAD)
-behind_count=$(git rev-list --count HEAD..@{u})
+git fetch origin $branch
+behind_count=$(git rev-list --count HEAD..origin/$branch)
 
 if [ "$behind_count" -gt "0" ]; then
     echo "Error!"
