@@ -17,7 +17,9 @@ else
   propsfile="build.properties"
 fi
 
-git add $propsfile $file
+cc-changelog-composite $mcversion
+
+git add $propsfile $file CHANGELOG-$mcversion.md CHANGELOG.md
 
 if [[ $(git diff) ]]; then
     echo "Error: Unstaged files were detected."

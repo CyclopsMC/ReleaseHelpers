@@ -1,0 +1,42 @@
+#!/bin/bash
+# Generates the composite changelog file
+
+if [ $# -ne 1 ]; then
+    echo "Error!"
+    echo "Expected: cc-changelog-composite <mc-version>"
+    exit 1;
+fi
+
+mcversion=$1
+outfile=$(echo "CHANGELOG-$mcversion.md")
+repo=$(grep "^github_url" gradle.properties|cut -d'=' -f2)
+
+datafull=""
+version="NONE"
+for file in resources/changelog/$mcversion-*.txt; do
+    data=""
+    versionprev=$version
+    version=$(echo "$file" | sed "s/^resources\/changelog\/\(.*\)\.txt$/\1/")
+    if [ $(git tag -l "$version") ]; then
+        date=$(git log -1 --format=%ai $version)
+    else
+        date=$(date '+%Y-%m-%d %T')
+    fi
+    data="${data}\n<a name=\"$version\"></a>\n"
+    if [[ "$versionprev" == "NONE" ]]; then
+        data="${data}## [$version] - $date\n\n"
+    else
+        data="${data}## [$version]($repo/compare/$versionprev...$version) - $date\n\n"
+    fi
+    
+    contents=$(cat "$file" | tail -n +3 | sed "s/Additions:/### Added/" | sed "s/Changes:/### Changed/" | sed "s/Fixes:/### Fixed/")
+    datafull="${data}${contents}\n${datafull}"
+done
+
+cat > $outfile <<- EOM
+# Changelog for Minecraft $mcversion
+All notable changes to this project will be documented in this file.
+EOM
+printf "$datafull" >> $outfile
+
+ln -sf $outfile CHANGELOG.md
