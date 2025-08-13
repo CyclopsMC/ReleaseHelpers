@@ -13,7 +13,7 @@ repo=$(grep "^github_url" gradle.properties|cut -d'=' -f2)
 
 datafull=""
 version="NONE"
-for file in resources/changelog/$mcversion-*.txt; do
+for file in $(ls resources/changelog/$mcversion-*.txt | sort -V); do
     data=""
     versionprev=$version
     version=$(echo "$file" | sed "s/^resources\/changelog\/\(.*\)\.txt$/\1/")
