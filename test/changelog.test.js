@@ -33,6 +33,11 @@ test('drafts an entry from a commit: trailers folded, body indented', () => {
   assert.strictEqual(text, '* Fix crash (#10), Closes #9\n  Happens when X.');
 });
 
+test('drops commit trailers like Claude-Session', () => {
+  const text = entryText({ subject: 'Lazily populate ops', body: 'Saves time.\n\nClaude-Session: https://claude.ai/code/session_1\nSigned-off-by: A <a@b>' });
+  assert.strictEqual(text, '* Lazily populate ops\n  Saves time.');
+});
+
 test('drops the squashed commit list of GitHub squash merges', () => {
   const text = entryText({ subject: 'Add fuzzing (#1607)', body: 'Context line.\n\n* Initial plan\n* Add test\n\n---------\n\nCo-authored-by: Bot <b@c>' });
   assert.strictEqual(text, '* Add fuzzing (#1607)\n  Context line.');

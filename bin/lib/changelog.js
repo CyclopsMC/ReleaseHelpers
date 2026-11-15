@@ -9,7 +9,8 @@ const SECTIONS = ['Additions', 'Changes', 'Fixes'];
 const SECTION_LINE = /^(Additions|Changes|Fixes):\s*$/;
 const TRAILER = /^(Closes|Fixes|Required for|Related to|Requires|Part of|Refs)\b/i;
 const TRAILER_IN_ENTRY = /,\s*(Closes|Fixes|Required for|Related to|Requires|Part of|Refs)\b.*$/i;
-const IGNORED_BODY_LINE = /^(Co-authored-by|Signed-off-by):/i;
+// Commit trailers that don't belong in a changelog (Claude-Session is added by Claude Code).
+const IGNORED_BODY_LINE = /^(Co-authored-by|Signed-off-by|Claude-Session):/i;
 const TRANSLATIONS_ENTRY = 'Add translations through Crowdin';
 
 // Section per first word, based on the published changelogs of the Cyclops mods.
