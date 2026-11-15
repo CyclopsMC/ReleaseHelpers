@@ -11,6 +11,12 @@ _cc_helpers_mods() {
   _describe -t mods 'mod' mods
 }
 
+_cc_helpers_versions() {
+  local -a versions
+  versions=(${(f)"$(cc-status --list-versions 2>/dev/null)"})
+  _describe -t versions 'version' versions
+}
+
 _cc_status() {
   _arguments -s \
     '(-v --verbose)'{-v,--verbose}'[list the commits behind each cell]' \
@@ -20,4 +26,21 @@ _cc_status() {
     '*:mod:_cc_helpers_mods'
 }
 
+_cc_release_chain() {
+  _arguments -s \
+    '--no-review[do not ask Claude to review clean upmerges]' \
+    '--no-build[do not build]' \
+    '(- *)'{-h,--help}'[show help]' \
+    '1:mod:_cc_helpers_mods' \
+    '2:version:_cc_helpers_versions'
+}
+
+_cc_build() {
+  _arguments -s \
+    '--env[print an export line for GRADLE_OPTS]' \
+    '(- *)'{-h,--help}'[show help]'
+}
+
 compdef _cc_status cc-status
+compdef _cc_release_chain cc-release-chain
+compdef _cc_build cc-build

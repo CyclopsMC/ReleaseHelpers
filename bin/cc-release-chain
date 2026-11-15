@@ -1,0 +1,650 @@
+#!/usr/bin/env node
+'use strict';
+// Releases a mod on a maintained MC version and all higher ones:
+// sync, upmerge, build, review, changelog, bump and release, per version.
+
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { loadConfig } = require('./lib/config');
+const { git, gitOrNull } = require('./lib/git');
+const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing } = require('./lib/status');
+const { listCommits, partition } = require('./lib/commits');
+const { readWorkingProps, readPropsAt, cyclopsVersion } = require('./lib/props');
+const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/changelog');
+const { runBuild, buildEnv, buildEnabled, buildCommand } = require('./lib/build');
+const { tryLock, modLockDir, modLockOwner, acquireBuildSlot } = require('./lib/lock');
+const { Prompter, colors: c } = require('./lib/ui');
+
+const HELP = `Usage: cc-release-chain [options] <mod> [version]
+
+Releases a mod on an MC version and all higher maintained ones, one version at a time:
+sync with origin, upmerge from the version below, build, let Claude review a clean upmerge,
+edit the drafted changelog, choose the version bump, and run cc-release.
+
+Without a version, the chain starts at the lowest version with unreleased changes.
+It can be stopped at any prompt and run again to continue where it left off.
+
+Options:
+  --no-review       Don't ask Claude to review clean upmerges
+  --no-build        Don't build
+  --list-mods       Print the mod names (used by shell completion)
+  --list-versions   Print the version names (used by shell completion)
+  -h, --help        Show this help
+`;
+
+const DEFAULT_REVIEW_PROMPT = "Was the upmerge in last commit correct? If not, fix it, but don't git commit it yet.";
+const DEFAULT_REVIEW_COMMAND = ['claude', '-p', '--permission-mode', 'acceptEdits', '--allowedTools',
+  'Read,Grep,Glob,Edit,Write,Bash(./gradlew:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)'];
+const DEFAULT_UPMERGE_COMMAND = ['claude', 'upmerge'];
+const DEFAULT_FIX_COMMAND = ['claude'];
+
+class Abort extends Error {}
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const opts = { review: true, build: true, list: null, positional: [] };
+  for (const a of argv) {
+    if (a === '--no-review') opts.review = false;
+    else if (a === '--no-build') opts.build = false;
+    else if (a === '--list-mods') opts.list = 'mods';
+    else if (a === '--list-versions') opts.list = 'versions';
+    else if (a === '-h' || a === '--help') {
+      process.stdout.write(HELP);
+      process.exit(0);
+    } else if (a.startsWith('-')) fail(`Unknown option ${a}\n\n${HELP}`);
+    else opts.positional.push(a);
+  }
+  if (!opts.list && (opts.positional.length < 1 || opts.positional.length > 2)) fail(HELP);
+  return opts;
+}
+
+// Ctrl-C reaches both an interactive child (e.g. Claude) and us; only the child should react.
+let childRunning = false;
+let childEnded = 0;
+function onInterrupt() {
+  if (childRunning || Date.now() - childEnded < 1000) return;
+  process.exit(130);
+}
+
+// Runs a command attached to the terminal; returns its exit code.
+function run(cmd, args, { cwd, env = process.env } = {}) {
+  childRunning = true;
+  const r = spawnSync(cmd, args, {
+    cwd,
+    stdio: 'inherit',
+    env: { ...env, PATH: `${__dirname}${path.delimiter}${env.PATH || ''}` },
+  });
+  childRunning = false;
+  childEnded = Date.now();
+  if (r.error) {
+    console.log(c.red(`Could not run ${cmd}: ${r.error.message}`));
+    return 127;
+  }
+  return r.status === null ? 1 : r.status;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const formatMs = ms => (ms >= 60000 ? `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s` : `${Math.round(ms / 1000)}s`);
+
+// Per-checkout state for resuming, kept in .git/cc-release-chain/.
+function stateDirOf(repo) {
+  const gitDir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+  return path.join(gitDir, 'cc-release-chain');
+}
+function loadState(repo) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(stateDirOf(repo), 'state.json'), 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+function saveState(ctx) {
+  fs.mkdirSync(ctx.stateDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.stateDir, 'state.json'), `${JSON.stringify(ctx.state, null, 2)}\n`);
+}
+function clearState(ctx) {
+  for (const f of ['state.json', 'changelog-draft.txt']) fs.rmSync(path.join(ctx.stateDir, f), { force: true });
+}
+
+const head = async repo => (await git(repo, ['rev-parse', 'HEAD'])).trim();
+const isMerging = async repo => (await gitOrNull(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])) !== null;
+const hasConflicts = async repo => (await git(repo, ['ls-files', '-u'])).trim() !== '';
+const isDirty = async repo => (await git(repo, ['status', '--porcelain', '--untracked-files=no'])).trim() !== '';
+const tagExists = async (repo, tag) => (await gitOrNull(repo, ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) !== null;
+const count = async (repo, range) => Number((await git(repo, ['rev-list', '--count', ...range])).trim());
+
+function heading(text) {
+  console.log(`\n${c.bold(c.cyan(`== ${text} ==`))}`);
+}
+
+// --- Steps -------------------------------------------------------------------------------
+
+async function sync(ctx) {
+  const { repo, version, ui } = ctx;
+  const branch = await gitOrNull(repo, ['symbolic-ref', '-q', '--short', 'HEAD']);
+  if (branch !== version.branch) throw new Abort(`${repo} is on ${branch || 'a detached HEAD'}, expected ${version.branch}`);
+  await git(repo, ['fetch', '--quiet', '--tags', 'origin', `+refs/heads/${version.branch}:refs/remotes/origin/${version.branch}`]);
+  if (await isMerging(repo)) return;
+  const remote = `refs/remotes/origin/${version.branch}`;
+  const behind = await count(repo, [`HEAD..${remote}`]);
+  const ahead = await count(repo, [`${remote}..HEAD`]);
+  if (behind && ahead) throw new Abort(`${version.branch} has diverged from origin; merge or rebase it first`);
+  if (behind) {
+    if (await isDirty(repo)) throw new Abort(`${repo} has uncommitted changes and is behind origin`);
+    console.log(`Pulling ${plural(behind, 'commit')} from origin/${version.branch}...`);
+    await git(repo, ['merge', '--quiet', '--ff-only', remote]);
+  }
+  if (ahead && !ctx.resuming) {
+    console.log(`${version.branch} has ${plural(ahead, 'unpushed commit')}:`);
+    run('git', ['--no-pager', 'log', '--oneline', `${remote}..HEAD`], { cwd: repo });
+    if (!(await ui.confirm('Release them too?', false))) throw new Abort('Push or remove the unpushed commits first');
+  }
+}
+
+async function resolveConflicts(ctx) {
+  const { repo, ui, config } = ctx;
+  let runClaude = true;
+  for (;;) {
+    if (runClaude) {
+      const cmd = (config.claude && config.claude.upmerge) || DEFAULT_UPMERGE_COMMAND;
+      console.log(c.yellow(`The upmerge has conflicts. Starting ${cmd.join(' ')}; exit Claude when it's done.`));
+      run(cmd[0], cmd.slice(1), { cwd: repo, env: buildEnv(ctx.version) });
+    }
+    const conflicts = await hasConflicts(repo);
+    if (!conflicts && !(await isMerging(repo))) return;
+    if (!conflicts && (await ui.confirm('The conflicts are resolved. Commit the merge?', true))) {
+      await git(repo, ['commit', '--quiet', '--no-edit']);
+      return;
+    }
+    const answer = await ui.choose(conflicts ? 'The merge still has conflicts.' : 'The merge is not committed.', [
+      { key: 'c', label: '[c]laude again', value: 'claude' },
+      { key: 'r', label: '[r]echeck (fixed it yourself)', value: 'recheck' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'claude');
+    if (answer === 'abort') throw new Abort('Stopped during the upmerge');
+    runClaude = answer === 'claude';
+  }
+}
+
+// Returns 'none' (lowest version), 'already', 'clean' or 'conflict'.
+async function upmerge(ctx) {
+  const { repo, version, lower, state } = ctx;
+  if (!lower) return 'none';
+  if (await isMerging(repo)) {
+    await resolveConflicts(ctx);
+    state.upmerge = 'conflict';
+    saveState(ctx);
+    return state.upmerge;
+  }
+  try {
+    await git(repo, ['fetch', '--quiet', 'origin', `+refs/heads/${ctx.src}:refs/remotes/origin/${ctx.src}`]);
+  } catch (e) {
+    throw new Abort(`Can't fetch ${ctx.src} to upmerge from: ${e.message}`);
+  }
+  if ((await gitOrNull(repo, ['merge-base', '--is-ancestor', `refs/remotes/origin/${ctx.src}`, 'HEAD'])) !== null) {
+    if (!state.upmerge) console.log(`Already contains origin/${ctx.src}.`);
+    return state.upmerge || 'already';
+  }
+  console.log(`Upmerging origin/${ctx.src} into ${version.branch}...`);
+  const code = run('cc-upmerge', [], { cwd: repo });
+  if (code !== 0) {
+    if (!(await hasConflicts(repo))) throw new Abort('cc-upmerge failed');
+    await resolveConflicts(ctx);
+    state.upmerge = 'conflict';
+  } else {
+    state.upmerge = 'clean';
+  }
+  saveState(ctx);
+  return state.upmerge;
+}
+
+async function commitChanges(ctx, what, defaultMessage) {
+  const { repo, ui } = ctx;
+  console.log(`${what} changed:`);
+  run('git', ['--no-pager', 'diff', '--stat'], { cwd: repo });
+  for (;;) {
+    const answer = await ui.choose('Commit these changes?', [
+      { key: 'y', label: '[y]es', value: 'yes' },
+      { key: 'd', label: '[d]iff', value: 'diff' },
+      { key: 'r', label: '[r]evert them', value: 'revert' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'yes');
+    if (answer === 'diff') run('git', ['--no-pager', 'diff'], { cwd: repo });
+    else if (answer === 'revert') {
+      await git(repo, ['checkout', '--', '.']);
+      return false;
+    } else if (answer === 'abort') {
+      throw new Abort('Stopped with uncommitted changes');
+    } else {
+      const message = await ui.input('Commit message', defaultMessage);
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '--quiet', '-m', message]);
+      return true;
+    }
+  }
+}
+
+async function buildUntilOk(ctx) {
+  const { repo, version, ui, config, state, result } = ctx;
+  const log = path.join(ctx.stateDir, 'build.log');
+  for (;;) {
+    console.log(`Building: ${buildCommand(config).join(' ')} ${c.dim(`(log: ${log})`)}`);
+    const { code, ms } = await runBuild({ config, version, cwd: repo, logFile: log });
+    if (code === 0) {
+      console.log(c.green(`Build OK (${formatMs(ms)})`));
+      state.built = await head(repo);
+      saveState(ctx);
+      result.build = 'ok';
+      return;
+    }
+    const tail = fs.readFileSync(log, 'utf8').trimEnd().split('\n').slice(-30).join('\n');
+    console.log(`${c.dim(tail)}\n${c.red(`Build failed after ${formatMs(ms)} (full log: ${log})`)}`);
+    const answer = await ui.choose('Build failed.', [
+      { key: 'r', label: '[r]etry', value: 'retry' },
+      { key: 'c', label: '[c]laude', value: 'claude' },
+      { key: 's', label: '[s]kip the build', value: 'skip' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'retry');
+    if (answer === 'abort') throw new Abort('Stopped after a failed build');
+    if (answer === 'skip') {
+      result.build = 'skipped';
+      return;
+    }
+    if (answer === 'claude') {
+      const cmd = (config.claude && config.claude.fix) || DEFAULT_FIX_COMMAND;
+      const prompt = `The build (${buildCommand(config).join(' ')}) fails on ${version.branch}`
+        + `${ctx.lower ? ` after upmerging origin/${ctx.src}` : ''}. The full build log is at ${log}. `
+        + "Fix it, but don't git commit. GRADLE_OPTS is already set for this Minecraft version, so don't change gradle.properties or ~/.gradle/gradle.properties.";
+      run(cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
+      if (await isDirty(repo)) await commitChanges(ctx, 'Claude', 'Fix build');
+    }
+  }
+}
+
+async function review(ctx) {
+  const { repo, version, config, ui, state, result } = ctx;
+  const cmd = (config.claude && config.claude.review) || DEFAULT_REVIEW_COMMAND;
+  const prompt = `${(config.claude && config.claude.reviewPrompt) || DEFAULT_REVIEW_PROMPT}\n\n`
+    + `Context from cc-release-chain: the last commit merges origin/${ctx.src} into ${version.branch}. `
+    + `${result.build === 'ok' ? `The build (${buildCommand(config).join(' ')}) passed after the merge. ` : ''}`
+    + 'GRADLE_OPTS is already set for this Minecraft version, so run Gradle as usual and '
+    + "don't change gradle.properties or ~/.gradle/gradle.properties. End with a one-line verdict.";
+  for (;;) {
+    console.log('Asking Claude to review the upmerge...');
+    const code = run(cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
+    if (code === 0) break;
+    const answer = await ui.choose('The Claude review failed.', [
+      { key: 'r', label: '[r]etry', value: 'retry' },
+      { key: 's', label: '[s]kip the review', value: 'skip' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'retry');
+    if (answer === 'abort') throw new Abort('Stopped after a failed review');
+    if (answer === 'skip') {
+      result.review = 'skipped';
+      return false;
+    }
+  }
+  let committed = false;
+  if (await isDirty(repo)) {
+    committed = await commitChanges(ctx, 'Claude', `Fix upmerge from ${ctx.src}`);
+    result.review = committed ? 'fixed' : 'changes reverted';
+  } else {
+    console.log('Claude changed nothing.');
+    result.review = 'no changes';
+  }
+  state.reviewed = await head(repo);
+  saveState(ctx);
+  return committed;
+}
+
+async function buildAndReview(ctx, merged) {
+  const { repo, config, version, state, opts } = ctx;
+  const sha = await head(repo);
+  const wantBuild = opts.build && buildEnabled(config, version) && state.built !== sha;
+  const wantReview = opts.review && merged === 'clean' && state.reviewed !== sha;
+  if (!opts.build || !buildEnabled(config, version)) ctx.result.build = 'off';
+  else if (!wantBuild) ctx.result.build = 'ok';
+  if (!wantBuild && !wantReview) return;
+  const free = await acquireBuildSlot(config.maxParallelBuilds || 2, () => console.log('Waiting for a free build slot...'));
+  try {
+    if (wantBuild) await buildUntilOk(ctx);
+    if (wantReview && (await review(ctx)) && wantBuild) await buildUntilOk(ctx);
+  } finally {
+    free();
+  }
+}
+
+function openEditor(config, file) {
+  const editor = config.editor || process.env.VISUAL || process.env.EDITOR || 'vi';
+  // Through sh, so editors with arguments work ("code --wait").
+  const code = run('sh', ['-c', `${editor} "$1"`, 'sh', file]);
+  if (code !== 0) console.log(c.yellow(`The editor exited with code ${code}.`));
+}
+
+// Returns the final changelog text, or null to skip this version's release.
+async function editChangelog(ctx, props, since) {
+  const { repo, version, ui, config } = ctx;
+  const file = path.join(ctx.stateDir, 'changelog-draft.txt');
+  let regenerate = true;
+  if (fs.existsSync(file)) {
+    regenerate = (await ui.choose('Found your changelog draft from an earlier run.', [
+      { key: 'u', label: '[u]se it', value: 'use' },
+      { key: 'r', label: '[r]egenerate it', value: 'regenerate' },
+    ], 'use')) === 'regenerate';
+  }
+  if (regenerate) {
+    const cyclops = cyclopsVersion(props);
+    const header = ["As always, don't forget to backup your world before updating!"];
+    if (cyclops) header.push(`Requires CyclopsCore version ${cyclops} or higher.`);
+    fs.mkdirSync(ctx.stateDir, { recursive: true });
+    fs.writeFileSync(file, await draftChangelog({
+      cwd: repo,
+      mc: props.minecraft_version,
+      since,
+      srcBranch: ctx.lower ? ctx.src : null,
+      branch: version.branch,
+      header,
+      devOnlyPaths: config.devOnlyPaths,
+    }));
+  }
+  for (;;) {
+    console.log(`Opening the changelog draft for ${version.name}: ${c.dim(file)}`);
+    openEditor(config, file);
+    const { text, errors } = finalizeChangelog(fs.readFileSync(file, 'utf8'));
+    if (!errors.length) return text;
+    console.log(c.red(`The changelog is not ready:\n${errors.map(e => `  - ${e}`).join('\n')}`));
+    const answer = await ui.choose('What now?', [
+      { key: 'e', label: '[e]dit again', value: 'edit' },
+      { key: 's', label: '[s]kip this release', value: 'skip' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'edit');
+    if (answer === 'abort') throw new Abort('Stopped while editing the changelog');
+    if (answer === 'skip') return null;
+  }
+}
+
+async function chooseBump(ctx, current, text) {
+  const [major, minor, patch] = current.split('.').map(Number);
+  const next = { patch: `${major}.${minor}.${patch + 1}`, minor: `${major}.${minor + 1}.0`, major: `${major + 1}.0.0` };
+  const suggested = suggestBump(text);
+  const below = ctx.previous && ctx.previous.bump ? ` ${ctx.previous.name} got: ${ctx.previous.bump}.` : '';
+  console.log(`Suggested: ${suggested} (${suggested === 'minor' ? 'the changelog has Additions' : 'no Additions'}).${below}`);
+  return ctx.ui.choose(`${ctx.version.name}: ${current} ->`, [
+    { key: 'p', label: `[p]atch ${next.patch}`, value: 'patch' },
+    { key: 'm', label: `[m]inor ${next.minor}`, value: 'minor' },
+    { key: 'j', label: `ma[j]or ${next.major}`, value: 'major' },
+  ], suggested);
+}
+
+async function placeChangelog(ctx, bump, text) {
+  const { repo, state } = ctx;
+  if (run('cc-bump', [bump], { cwd: repo }) !== 0) throw new Abort('cc-bump failed');
+  const props = readWorkingProps(repo);
+  const file = path.join(repo, 'resources', 'changelog', `${props.minecraft_version}-${props.mod_version}.txt`);
+  if (fs.existsSync(file)) throw new Abort(`${file} already exists`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  await git(repo, ['add', file]);
+  state.bump = bump;
+  saveState(ctx);
+  console.log(`Bumped to ${props.mod_version} and wrote ${path.relative(repo, file)}.`);
+}
+
+// Warns when a dependency in the same version dir has unreleased changes or a running chain.
+async function checkDependencies(ctx) {
+  const { repo, version, ui, found, mod, config } = ctx;
+  for (;;) {
+    const props = readWorkingProps(repo);
+    const warnings = [];
+    for (const other of found.byVersion[version.index]) {
+      if (other === mod || !(`${other.toLowerCase()}_version` in props)) continue;
+      const pid = modLockOwner(other);
+      if (pid) {
+        warnings.push(`a release chain for ${other} is running (pid ${pid})`);
+        continue;
+      }
+      const cell = await cellStatus({
+        repoDir: path.join(version.dir, other), version, lowerBranches: [], fetch: true, devOnlyPaths: config.devOnlyPaths,
+      }).catch(() => null);
+      const n = cell && cell.unreleased ? cell.unreleased.userFacing.length : 0;
+      if (n) warnings.push(`${other} has ${plural(n, 'unreleased change')} on ${version.name}`);
+    }
+    if (!warnings.length) return;
+    console.log(c.yellow(`${mod} depends on mods that may need a release first:\n${warnings.map(w => `  - ${w}`).join('\n')}`));
+    const answer = await ui.choose('Release anyway?', [
+      { key: 'i', label: '[i]gnore', value: 'ignore' },
+      { key: 'r', label: '[r]echeck', value: 'recheck' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'ignore');
+    if (answer === 'ignore') return;
+    if (answer === 'abort') throw new Abort('Stopped to release a dependency first');
+  }
+}
+
+async function release(ctx) {
+  const { repo, version, ui, result } = ctx;
+  for (;;) {
+    if (run('cc-release', [], { cwd: repo }) === 0) break;
+    const answer = await ui.choose('cc-release failed.', [
+      { key: 'r', label: '[r]etry', value: 'retry' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'retry');
+    if (answer === 'abort') throw new Abort('Stopped after a failed release');
+    // Tagged but not pushed: push both together instead of tagging again.
+    const props = readWorkingProps(repo);
+    const tag = `${props.minecraft_version}-${props.mod_version}`;
+    if ((await gitOrNull(repo, ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`])) === (await head(repo))) {
+      if (run('git', ['push', '--atomic', 'origin', `refs/heads/${version.branch}`, `refs/tags/${tag}`], { cwd: repo }) === 0) break;
+    }
+  }
+  const props = readWorkingProps(repo);
+  result.release = `${props.minecraft_version}-${props.mod_version}`;
+}
+
+async function pushUpmerge(ctx, why) {
+  const { repo, version, ui, result } = ctx;
+  const ahead = await count(repo, [`refs/remotes/origin/${version.branch}..HEAD`]);
+  if (!ahead) {
+    result.release = `not released (${why})`;
+    return;
+  }
+  if (await ui.confirm(`${why[0].toUpperCase()}${why.slice(1)}. Push the upmerge (${plural(ahead, 'commit')}) to origin/${version.branch}?`, true)) {
+    if (run('git', ['push', 'origin', `refs/heads/${version.branch}`], { cwd: repo }) !== 0) throw new Abort('Push failed');
+    result.release = `upmerge pushed (${why})`;
+  } else {
+    result.release = `not released (${why}), upmerge not pushed`;
+  }
+}
+
+// An earlier run may have tagged the release without pushing it.
+async function pushUnpushedTag(ctx) {
+  const { repo, version, ui, result } = ctx;
+  const props = readWorkingProps(repo);
+  const tag = `${props.minecraft_version}-${props.mod_version}`;
+  const tagged = await gitOrNull(repo, ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`]);
+  if (!tagged || tagged !== (await head(repo))) return false;
+  if ((await git(repo, ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`])).trim()) return false;
+  if (!(await ui.confirm(`${tag} was tagged by an earlier run but not pushed. Push it with ${version.branch}?`, true))) {
+    throw new Abort(`${tag} is not pushed yet`);
+  }
+  if (run('git', ['push', '--atomic', 'origin', `refs/heads/${version.branch}`, `refs/tags/${tag}`], { cwd: repo }) !== 0) {
+    throw new Abort('Push failed');
+  }
+  result.release = tag;
+  result.bump = ctx.state.bump;
+  clearState(ctx);
+  return true;
+}
+
+async function releaseVersion(ctx) {
+  const { repo, version } = ctx;
+  heading(`${ctx.mod} ${version.name} ${c.dim(`(${repo})`)}`);
+  await sync(ctx);
+  if (await pushUnpushedTag(ctx)) return;
+  const merged = await upmerge(ctx);
+  await buildAndReview(ctx, merged);
+
+  let props = readWorkingProps(repo);
+  const committed = await readPropsAt(repo, 'HEAD');
+  const changelogFile = path.join(repo, 'resources', 'changelog', `${props.minecraft_version}-${props.mod_version}.txt`);
+  if (committed.mod_version !== props.mod_version && fs.existsSync(changelogFile)) {
+    console.log(`Continuing with the bump to ${props.mod_version} from an earlier run.`);
+  } else {
+    const since = `${props.minecraft_version}-${props.mod_version}`;
+    if (!(await tagExists(repo, since))) {
+      await pushUpmerge(ctx, `there is no ${props.minecraft_version} release yet`);
+      clearState(ctx);
+      return;
+    }
+    const pending = partition(await listCommits(repo, [`refs/tags/${since}..HEAD`]), ctx.config.devOnlyPaths);
+    if (!pending.userFacing.length) {
+      await pushUpmerge(ctx, `nothing to release since ${since}`);
+      clearState(ctx);
+      return;
+    }
+    const text = await editChangelog(ctx, props, since);
+    if (text === null) {
+      await pushUpmerge(ctx, 'release skipped');
+      clearState(ctx);
+      return;
+    }
+    const bump = await chooseBump(ctx, props.mod_version, text);
+    ctx.result.bump = bump;
+    await placeChangelog(ctx, bump, text);
+    props = readWorkingProps(repo);
+  }
+  ctx.result.bump = ctx.result.bump || ctx.state.bump;
+  await checkDependencies(ctx);
+  await release(ctx);
+  clearState(ctx);
+}
+
+// --- Main --------------------------------------------------------------------------------
+
+function describeCell(cell) {
+  if (cell.error) return c.red(cell.error);
+  const parts = [cell.lastRelease ? `last release ${cell.lastRelease}` : `no ${cell.mc} release yet`];
+  if (cell.unreleased && cell.unreleased.userFacing.length) parts.push(plural(cell.unreleased.userFacing.length, 'unreleased change'));
+  if (cell.pending.userFacing.length) parts.push(`${cell.pending.userFacing.length} to upmerge`);
+  if (cell.local.length) parts.push(c.yellow(cell.local.join(', ')));
+  return parts.join(', ');
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    fail(e.message);
+  }
+  if (opts.list === 'versions') {
+    config.versions.forEach(v => console.log(v.name));
+    return;
+  }
+  const found = discoverMods(config);
+  if (opts.list === 'mods') {
+    found.mods.forEach(m => console.log(m));
+    return;
+  }
+
+  const mod = found.mods.find(m => m.toLowerCase() === opts.positional[0].toLowerCase());
+  if (!mod) fail(`Unknown mod ${opts.positional[0]}. Known mods: ${found.mods.join(', ')}`);
+  process.on('SIGINT', onInterrupt);
+  if (!tryLock(modLockDir(mod))) fail(`A release chain for ${mod} is already running (pid ${modLockOwner(mod)}).`);
+  for (const w of checkVersionDirs(config)) console.log(`${c.yellow('Warning:')} ${w}`);
+
+  const present = config.versions.filter(v => found.byVersion[v.index].has(mod));
+  console.log(`Checking ${mod}...`);
+  const cells = {};
+  const states = {};
+  for (const v of present) {
+    const repo = path.join(v.dir, mod);
+    const lowerBranches = present.filter(x => x.index < v.index).map(x => x.branch);
+    cells[v.index] = await cellStatus({ repoDir: repo, version: v, lowerBranches, fetch: true, devOnlyPaths: config.devOnlyPaths })
+      .catch(e => ({ error: e.message }));
+    states[v.index] = loadState(repo);
+  }
+
+  let start;
+  if (opts.positional[1]) {
+    start = present.find(v => v.name === opts.positional[1]);
+    if (!start) fail(`${mod} has no checkout for version ${opts.positional[1]}. Versions: ${present.map(v => v.name).join(', ')}`);
+  } else {
+    start = present.find(v => states[v.index] || cellUserFacing(cells[v.index]).length > 0);
+    if (!start) {
+      console.log(`Nothing to release for ${mod}.`);
+      return;
+    }
+  }
+  const chain = present.filter(v => v.index >= start.index);
+  chain.forEach((v, i) => {
+    if (i > 0 && v.index !== chain[i - 1].index + 1) {
+      fail(`${mod} has no checkout for ${config.versions[chain[i - 1].index + 1].name}, between ${chain[i - 1].name} and ${v.name}.`);
+    }
+  });
+
+  console.log(c.bold(`\nRelease chain for ${mod}:`));
+  const width = Math.max(...chain.map(v => v.name.length));
+  for (const v of chain) {
+    const resume = states[v.index] ? c.cyan(' (continuing an earlier run)') : '';
+    console.log(`  ${v.name.padEnd(width)}  ${describeCell(cells[v.index])}${resume}`);
+  }
+  const blocked = chain.filter(v => cells[v.index].error
+    || (!states[v.index] && cells[v.index].local.some(issue => !/unpushed/.test(issue))));
+  if (blocked.length) fail(`\nFix the problems above first (${blocked.map(v => v.name).join(', ')}).`);
+
+  const ui = new Prompter({ notify: config.notify !== false, title: `cc-release-chain ${mod}` });
+  const results = [];
+  let previous = null;
+  try {
+    if (!(await ui.confirm('Start?', true))) return;
+    for (const version of chain) {
+      const repo = path.join(version.dir, mod);
+      const below = version.index > 0 ? config.versions[version.index - 1] : null;
+      const lower = below && found.byVersion[below.index].has(mod) ? below : null;
+      let src = null;
+      if (lower) {
+        try {
+          src = fs.readFileSync(path.join(version.dir, '.upmerge-src-branch'), 'utf8').trim();
+        } catch (e) {
+          throw new Abort(`${path.join(version.dir, '.upmerge-src-branch')} is missing`);
+        }
+      }
+      const result = { name: version.name };
+      results.push(result);
+      const ctx = {
+        config, opts, ui, found, mod, version, lower, src, repo, result, previous,
+        stateDir: stateDirOf(repo),
+        state: states[version.index] || {},
+        resuming: !!states[version.index],
+      };
+      await releaseVersion(ctx);
+      previous = { name: version.name, bump: result.bump };
+    }
+  } catch (e) {
+    if (!(e instanceof Abort) && !/input was closed|^git /.test(e.message)) throw e;
+    console.log(c.red(`\n${e.message}.`));
+    console.log(`Run cc-release-chain ${mod} again to continue where it stopped.`);
+    process.exitCode = 1;
+  } finally {
+    ui.close();
+    if (results.length) {
+      console.log(c.bold(`\nSummary for ${mod}:`));
+      const w = Math.max(...results.map(r => r.name.length));
+      for (const r of results) {
+        const parts = [r.release ? (r.bump ? `released ${r.release} (${r.bump})` : r.release) : 'not finished'];
+        if (r.build) parts.push(`build ${r.build}`);
+        if (r.review) parts.push(`review: ${r.review}`);
+        console.log(`  ${r.name.padEnd(w)}  ${parts.join(', ')}`);
+      }
+    }
+  }
+}
+
+main().catch(e => fail(e.stack || e.message));

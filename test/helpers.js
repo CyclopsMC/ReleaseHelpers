@@ -12,10 +12,14 @@ const hasCommand = cmd => spawnSync('sh', ['-c', `command -v ${cmd}`]).status ==
 
 function createSandbox(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // cc-release signs tags (git tag -s); a fake gpg makes that work without keys.
+  const fakeGpg = path.join(dir, 'fake-gpg');
+  fs.writeFileSync(fakeGpg, '#!/bin/sh\ncat >/dev/null\necho "[GNUPG:] SIG_CREATED D 22 8 00 0 X" >&2\n'
+    + 'printf -- "-----BEGIN PGP SIGNATURE-----\\nfake\\n-----END PGP SIGNATURE-----\\n"\n', { mode: 0o755 });
   const gitconfig = path.join(dir, 'gitconfig');
   fs.writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.com\n'
     + '[commit]\n\tgpgSign = false\n[tag]\n\tgpgSign = false\n[init]\n\tdefaultBranch = main\n'
-    + '[merge "ours"]\n\tdriver = true\n');
+    + `[merge "ours"]\n\tdriver = true\n[gpg]\n\tprogram = ${fakeGpg}\n`);
 
   // Stand-ins: `open` must not launch apps; GNU sed is called gsed on macOS.
   const shims = path.join(dir, 'shims');

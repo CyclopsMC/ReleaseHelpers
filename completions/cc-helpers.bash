@@ -15,4 +15,28 @@ _cc_status() {
   fi
 }
 
+_cc_release_chain() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local i positional=0
+  COMPREPLY=()
+  if [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "--no-review --no-build -h --help" -- "$cur"))
+    return
+  fi
+  for ((i = 1; i < COMP_CWORD; i++)); do
+    [[ "${COMP_WORDS[i]}" != -* ]] && positional=$((positional + 1))
+  done
+  if [[ $positional -eq 0 ]]; then
+    COMPREPLY=($(compgen -W "$(cc-status --list-mods 2>/dev/null)" -- "$cur"))
+  elif [[ $positional -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "$(cc-status --list-versions 2>/dev/null)" -- "$cur"))
+  fi
+}
+
+_cc_build() {
+  COMPREPLY=($(compgen -W "--env -h --help" -- "${COMP_WORDS[COMP_CWORD]}"))
+}
+
 complete -F _cc_status cc-status
+complete -F _cc_release_chain cc-release-chain
+complete -F _cc_build cc-build
