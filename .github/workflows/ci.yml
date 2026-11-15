@@ -49,5 +49,6 @@ jobs:
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
       # Clones mods from GitHub and replays past release rounds with cc-release-chain --rehearse.
+      # The spec reporter keeps the transcript of commands and output readable, in collapsible groups.
       - name: Replay real release rounds
-        run: node --test test/real/*.test.js
+        run: node --test --test-reporter=spec test/real/*.test.js

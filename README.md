@@ -214,18 +214,21 @@ On macOS, the tests need GNU sed as `gsed` (`brew install gnu-sed`), like `cc-bu
 `test/real/` replays past release rounds of real mods (cloned from GitHub, so it needs network access).
 Each mod starts at the commits just before a round, and `cc-release-chain --rehearse` makes the same
 releases again, with stand-ins for Gradle, Claude and GPG, and an editor stand-in that saves each draft
-and replaces it with the changelog that was really published. The test checks the new tags, versions,
-changelogs, upmerges and submodules, and compares the drafts and the `cc-status` output with snapshots
-in `test/real/snapshots/`:
+and replaces it with the changelog that was really published. Upmerges with conflicts are finished the
+way they really were: the conflicted files, and any other files the real upmerge commit changed, are
+taken from that commit. The test checks the new tags, versions, changelogs, upmerges (the same files as
+the real ones) and submodules, and compares the drafts and the `cc-status` output with snapshots in
+`test/real/snapshots/`. It prints a transcript of every command it runs with its output, including the
+drafts and what the stand-ins did; in GitHub Actions each command is a collapsible group.
 
 ```bash
-node --test test/real/*.test.js
+node --test --test-reporter=spec test/real/*.test.js
 ```
 
 After an intended change to drafts or `cc-status`, update the snapshots and review their diff:
 
 ```bash
-UPDATE_SNAPSHOTS=1 node --test test/real/*.test.js
+UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec test/real/*.test.js
 ```
 
 Set `CC_REAL_REPOS_DIR` to keep the clones between runs.
