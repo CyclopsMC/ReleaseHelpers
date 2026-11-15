@@ -4,7 +4,7 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-status`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-status`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
@@ -80,8 +80,45 @@ Options:
 
 `cc-status` only fetches `origin`; it never changes working trees or local branches.
 
+## Changelog drafts
+
+`cc-changelog <patch|minor|major>` now starts from a draft made by `cc-changelog-draft`, instead of the raw `git log`:
+
+```text
+As always, don't forget to backup your world before updating!
+Requires CyclopsCore version 1.31.0 or higher.
+
+# Draft made by cc-changelog-draft: review every entry. Lines starting with # are removed on release.
+Additions:
+# from 1.21.1-1.39.0
+* Add Expressions support to the Logic Programmer (#1766)
+
+Changes:
+
+Fixes:
+# from 1.21.1-1.39.0
+* Fix non-ticking parts not re-attaching to network after chunk reloads (#1786), Closes #1785
+# only on master-26-lts
+* Fix labels not being saved in singleplayer (#1784)
+
+# Left out:
+#   39a62925b Make battery-related game tests more robust (only dev files)
+```
+
+- Commits upmerged from the branch in `../.upmerge-src-branch` reuse the entries of the source release that contains them, so your edits there (rewording, merged entries, extra details) carry over. Entries you removed there stay removed.
+- Other commits are drafted from their message: `Closes #x`-style lines are folded into the entry, the rest of the body is indented, and the section is picked from the first word (Fix, Remove, ... go to Fixes; Add, Allow, Show, ... to Additions; the rest to Changes).
+- `Bump compat version` commits contribute the entries listed in their message, and translation commits become "Add translations through Crowdin".
+- Entries that are already in an earlier changelog of the same MC version are left out (e.g. backports).
+- `# ...` lines say where each group of entries comes from, and list what was left out and why.
+
+`cc-changelog-draft` prints the draft for the current checkout (`--since <tag>`, `--source <branch|none>`, `--no-comments`).
+
+`cc-changelog-confirm` (run by `cc-release`) now first runs `cc-changelog-finalize`, which removes the `#` lines and empty sections, and stops the release if the changelog still has a `TODO` marker, a `Bump ... version` entry, merge conflict markers, or no entries.
+
 ## Tests
 
 ```bash
 node --test test/*.test.js
 ```
+
+On macOS, the tests need GNU sed as `gsed` (`brew install gnu-sed`), like `cc-bump`.
