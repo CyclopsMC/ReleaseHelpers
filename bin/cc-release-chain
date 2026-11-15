@@ -15,6 +15,7 @@ const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/change
 const { runBuild, buildEnv, buildEnabled, buildCommand } = require('./lib/build');
 const { tryLock, modLockDir, modLockOwner, acquireBuildSlot } = require('./lib/lock');
 const { Prompter, colors: c } = require('./lib/ui');
+const { createRehearsal, rehearsalResults } = require('./lib/rehearsal');
 
 const HELP = `Usage: cc-release-chain [options] <mod> [version]
 
@@ -26,6 +27,9 @@ Without a version, the chain starts at the lowest version with unreleased change
 It can be stopped at any prompt and run again to continue where it left off.
 
 Options:
+  --rehearse        Run the chain on copies of the checkouts, pushing to a local stand-in for
+                    origin: everything runs for real, but nothing is published
+  --confirm         Ask before pushing each release, showing the tag, commits and changelog
   --no-review       Don't ask Claude to review clean upmerges
   --no-build        Don't build
   --list-mods       Print the mod names (used by shell completion)
@@ -47,9 +51,11 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const opts = { review: true, build: true, list: null, positional: [] };
+  const opts = { review: true, build: true, rehearse: false, confirm: false, list: null, positional: [] };
   for (const a of argv) {
     if (a === '--no-review') opts.review = false;
+    else if (a === '--rehearse') opts.rehearse = true;
+    else if (a === '--confirm') opts.confirm = true;
     else if (a === '--no-build') opts.build = false;
     else if (a === '--list-mods') opts.list = 'mods';
     else if (a === '--list-versions') opts.list = 'versions';
@@ -252,6 +258,8 @@ async function buildUntilOk(ctx) {
     ], 'retry');
     if (answer === 'abort') throw new Abort('Stopped after a failed build');
     if (answer === 'skip') {
+      console.log(c.yellow('Continuing without a successful local build. If the build fails in CI too, '
+        + 'the release tag is pushed but nothing gets published.'));
       result.build = 'skipped';
       return;
     }
@@ -397,11 +405,11 @@ async function placeChangelog(ctx, bump, text) {
 
 // Warns when a dependency in the same version dir has unreleased changes or a running chain.
 async function checkDependencies(ctx) {
-  const { repo, version, ui, found, mod, config } = ctx;
+  const { repo, version, ui, depFound, mod, config } = ctx;
   for (;;) {
     const props = readWorkingProps(repo);
     const warnings = [];
-    for (const other of found.byVersion[version.index]) {
+    for (const other of depFound.byVersion[version.index]) {
       if (other === mod || !(`${other.toLowerCase()}_version` in props)) continue;
       const pid = modLockOwner(other);
       if (pid) {
@@ -409,7 +417,7 @@ async function checkDependencies(ctx) {
         continue;
       }
       const cell = await cellStatus({
-        repoDir: path.join(version.dir, other), version, lowerBranches: [], fetch: true, devOnlyPaths: config.devOnlyPaths,
+        repoDir: path.join(version.realDir || version.dir, other), version, lowerBranches: [], fetch: true, devOnlyPaths: config.devOnlyPaths,
       }).catch(() => null);
       const n = cell && cell.unreleased ? cell.unreleased.userFacing.length : 0;
       if (n) warnings.push(`${other} has ${plural(n, 'unreleased change')} on ${version.name}`);
@@ -424,6 +432,28 @@ async function checkDependencies(ctx) {
     if (answer === 'ignore') return;
     if (answer === 'abort') throw new Abort('Stopped to release a dependency first');
   }
+}
+
+// With --confirm: shows what is about to be published and asks before pushing.
+async function confirmPush(ctx) {
+  const { repo, version, ui, result, mod, opts } = ctx;
+  const props = readWorkingProps(repo);
+  const tag = `${props.minecraft_version}-${props.mod_version}`;
+  const commits = (await git(repo, ['log', '--format=%h %s', `refs/remotes/origin/${version.branch}..HEAD`])).split('\n').filter(Boolean);
+  const file = path.join(repo, 'resources', 'changelog', `${tag}.txt`);
+  console.log(c.bold(`\nAbout to release ${mod} ${version.name}${opts.rehearse ? ' (rehearsal)' : ''}:`));
+  console.log(`  tag:       ${tag}${result.bump ? ` (${result.bump})` : ''}`);
+  console.log(commits.length
+    ? `  branch:    ${version.branch}: ${plural(commits.length, 'commit')}, plus the release commit that cc-release makes`
+    : `  branch:    ${version.branch}: only the release commit that cc-release makes`);
+  for (const l of commits.slice(0, 10)) console.log(`             ${l}`);
+  if (commits.length > 10) console.log(`             ... and ${commits.length - 10} more`);
+  const build = result.build === 'skipped' ? c.red('SKIPPED, not built locally') : (result.build || 'not run');
+  console.log(`  build:     ${build}`);
+  if (result.review) console.log(`  review:    ${result.review}`);
+  console.log('  changelog:');
+  for (const l of fs.readFileSync(file, 'utf8').trimEnd().split('\n')) console.log(`    | ${l}`);
+  if (!(await ui.confirm('Push this release?', false))) throw new Abort(`Stopped before pushing ${tag}`);
 }
 
 async function release(ctx) {
@@ -520,6 +550,7 @@ async function releaseVersion(ctx) {
   }
   ctx.result.bump = ctx.result.bump || ctx.state.bump;
   await checkDependencies(ctx);
+  if (ctx.opts.confirm) await confirmPush(ctx);
   await release(ctx);
   clearState(ctx);
 }
@@ -547,7 +578,7 @@ async function main() {
     config.versions.forEach(v => console.log(v.name));
     return;
   }
-  const found = discoverMods(config);
+  let found = discoverMods(config);
   if (opts.list === 'mods') {
     found.mods.forEach(m => console.log(m));
     return;
@@ -556,8 +587,18 @@ async function main() {
   const mod = found.mods.find(m => m.toLowerCase() === opts.positional[0].toLowerCase());
   if (!mod) fail(`Unknown mod ${opts.positional[0]}. Known mods: ${found.mods.join(', ')}`);
   process.on('SIGINT', onInterrupt);
-  if (!tryLock(modLockDir(mod))) fail(`A release chain for ${mod} is already running (pid ${modLockOwner(mod)}).`);
   for (const w of checkVersionDirs(config)) console.log(`${c.yellow('Warning:')} ${w}`);
+  const depFound = found;
+  let rehearsal = null;
+  if (opts.rehearse) {
+    console.log(c.bold(`Setting up a rehearsal for ${mod}: nothing will be pushed to the real origin.`));
+    rehearsal = await createRehearsal(config, found, mod);
+    for (const n of rehearsal.notes) console.log(`${c.yellow('Note:')} ${n}`);
+    config = rehearsal.config;
+    found = discoverMods(config);
+  } else if (!tryLock(modLockDir(mod))) {
+    fail(`A release chain for ${mod} is already running (pid ${modLockOwner(mod)}).`);
+  }
 
   const present = config.versions.filter(v => found.byVersion[v.index].has(mod));
   console.log(`Checking ${mod}...`);
@@ -579,6 +620,7 @@ async function main() {
     start = present.find(v => states[v.index] || cellUserFacing(cells[v.index]).length > 0);
     if (!start) {
       console.log(`Nothing to release for ${mod}.`);
+      if (rehearsal) fs.rmSync(rehearsal.root, { recursive: true, force: true });
       return;
     }
   }
@@ -589,7 +631,7 @@ async function main() {
     }
   });
 
-  console.log(c.bold(`\nRelease chain for ${mod}:`));
+  console.log(c.bold(`\nRelease chain for ${mod}${rehearsal ? ' (rehearsal)' : ''}:`));
   const width = Math.max(...chain.map(v => v.name.length));
   for (const v of chain) {
     const resume = states[v.index] ? c.cyan(' (continuing an earlier run)') : '';
@@ -597,13 +639,20 @@ async function main() {
   }
   const blocked = chain.filter(v => cells[v.index].error
     || (!states[v.index] && cells[v.index].local.some(issue => !/unpushed/.test(issue))));
-  if (blocked.length) fail(`\nFix the problems above first (${blocked.map(v => v.name).join(', ')}).`);
+  if (blocked.length) {
+    if (rehearsal) fs.rmSync(rehearsal.root, { recursive: true, force: true });
+    fail(`\nFix the problems above first (${blocked.map(v => v.name).join(', ')}).`);
+  }
 
   const ui = new Prompter({ notify: config.notify !== false, title: `cc-release-chain ${mod}` });
   const results = [];
   let previous = null;
   try {
-    if (!(await ui.confirm('Start?', true))) return;
+    if (!(await ui.confirm('Start?', true))) {
+      if (rehearsal) fs.rmSync(rehearsal.root, { recursive: true, force: true });
+      rehearsal = null;
+      return;
+    }
     for (const version of chain) {
       const repo = path.join(version.dir, mod);
       const below = version.index > 0 ? config.versions[version.index - 1] : null;
@@ -619,7 +668,7 @@ async function main() {
       const result = { name: version.name };
       results.push(result);
       const ctx = {
-        config, opts, ui, found, mod, version, lower, src, repo, result, previous,
+        config, opts, ui, found, depFound, mod, version, lower, src, repo, result, previous,
         stateDir: stateDirOf(repo),
         state: states[version.index] || {},
         resuming: !!states[version.index],
@@ -630,7 +679,9 @@ async function main() {
   } catch (e) {
     if (!(e instanceof Abort) && !/input was closed|^git /.test(e.message)) throw e;
     console.log(c.red(`\n${e.message}.`));
-    console.log(`Run cc-release-chain ${mod} again to continue where it stopped.`);
+    console.log(rehearsal
+      ? 'A rehearsal can\'t be continued; run it again to start a new one.'
+      : `Run cc-release-chain ${mod} again to continue where it stopped.`);
     process.exitCode = 1;
   } finally {
     ui.close();
@@ -644,7 +695,25 @@ async function main() {
         console.log(`  ${r.name.padEnd(w)}  ${parts.join(', ')}`);
       }
     }
+    if (rehearsal) await printRehearsal(rehearsal);
   }
+}
+
+async function printRehearsal(rehearsal) {
+  const { branches, tags } = await rehearsalResults(rehearsal);
+  console.log(c.bold('\nRehearsal results (nothing was pushed to the real origin):'));
+  if (!branches.length && !tags.length) console.log('  Nothing would have been pushed.');
+  for (const b of branches) {
+    console.log(`  ${b.branch}: would push ${plural(b.commits.length, 'commit')}`);
+    for (const l of b.commits.slice(0, 15)) console.log(`      ${l}`);
+    if (b.commits.length > 15) console.log(`      ... and ${b.commits.length - 15} more`);
+  }
+  for (const t of tags) {
+    console.log(`  tag ${t.tag}, changelog:`);
+    for (const l of (t.changelog || '(none)').trimEnd().split('\n')) console.log(`      | ${l}`);
+  }
+  console.log(`\nRehearsal copies: ${rehearsal.root}`);
+  console.log(`They share git objects with your checkouts. Delete them with: rm -rf ${JSON.stringify(rehearsal.root)}`);
 }
 
 main().catch(e => fail(e.stack || e.message));

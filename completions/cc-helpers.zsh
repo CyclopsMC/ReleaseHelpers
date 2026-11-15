@@ -28,6 +28,8 @@ _cc_status() {
 
 _cc_release_chain() {
   _arguments -s \
+    '--rehearse[run on copies, pushing to a local stand-in for origin]' \
+    '--confirm[ask before pushing each release]' \
     '--no-review[do not ask Claude to review clean upmerges]' \
     '--no-build[do not build]' \
     '(- *)'{-h,--help}'[show help]' \

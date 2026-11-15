@@ -169,9 +169,29 @@ It first shows the chain and asks to start, then does this for each version, in 
 7. **Dependencies**: warns if a mod this one depends on (a `<modid>_version` property) has unreleased changes or a running release chain on the same MC version.
 8. **Release** with `cc-release`.
 
+Options:
+- `--confirm`: ask before pushing each release, showing the tag, the commits to push, the build and review results, and the changelog. Useful while you get used to the chain; leave it out once you trust it.
+- `--rehearse`: a dry run with the real tools, see below.
+- `--no-review`, `--no-build`: skip the Claude review or the build.
+
 Versions without a release on their MC version yet (e.g. a new MC version) only get the upmerge pushed, and so do versions where nothing user-facing changed. At the end, it prints a summary per version.
 
 You can stop at any prompt (or with Ctrl-C) and run the same command again to continue: the upmerge, a passed build, a review and your edited draft are kept.
+
+### Rehearsals
+
+```bash
+cc-release-chain --rehearse IntegratedDynamics
+```
+
+Runs the whole chain for real (Gradle, Claude, your editor, signing, upmerges and the release commits) on copies of your checkouts, whose `origin` is a local stand-in for the real one. Nothing is pushed to the real origin, so nothing gets published, and your checkouts are not changed (they only fetch).
+
+- The stand-in origin starts with the state each checkout just fetched; the copies start at your local branches, including unpushed commits, but without uncommitted changes.
+- Local git settings for merging and signing, and small ignored files like `secrets.properties`, are copied along.
+- At the end it shows what would have been pushed: the commits per branch and the new tags with their changelogs.
+- The copies are kept under `~/.cache/cc-helpers/rehearsals/` for inspection. They share git objects with your checkouts (so they are quick to make), but their builds take space: delete them when done.
+- The first build in a copy is a cold one (no `build/` dir yet), so it takes longer than usual.
+- A rehearsal can't be continued after stopping; run it again to start a new one.
 
 ### Running chains in parallel
 
@@ -179,7 +199,7 @@ You can run chains for different mods at the same time, each in its own terminal
 
 - Each chain only touches its own mod's checkouts. A second chain for the same mod is refused.
 - Builds use `GRADLE_OPTS` per process, so nothing shared like `~/.gradle/gradle.properties` is changed.
-- At most `maxParallelBuilds` builds and reviews run at once; other chains wait for a slot.
+- At most `maxParallelBuilds` builds and reviews run at once; other chains wait for a slot. Rehearsals share these slots.
 - After a long step, a chain rings the terminal bell and shows a macOS notification when it needs you.
 - If mod B depends on mod A, release A first: step 7 warns when A still has unreleased changes or a running chain.
 

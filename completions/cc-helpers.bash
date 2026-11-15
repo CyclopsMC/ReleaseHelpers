@@ -20,7 +20,7 @@ _cc_release_chain() {
   local i positional=0
   COMPREPLY=()
   if [[ "$cur" == -* ]]; then
-    COMPREPLY=($(compgen -W "--no-review --no-build -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "--rehearse --confirm --no-review --no-build -h --help" -- "$cur"))
     return
   fi
   for ((i = 1; i < COMP_CWORD; i++)); do

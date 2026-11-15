@@ -130,6 +130,7 @@ test('releases a fix on 1.20 and 1.21, and pushes the upmerge to a version witho
   assert.ok(!log().includes('review mc20-lts'), 'no review without an upmerge');
 
   assert.match(r.out, /Suggested: patch \(no Additions\)\./);
+  assert.ok(!r.out.includes('About to release'), 'no final confirmation without --confirm');
   assert.match(r.out, /1\.20-lts {2}released 1\.20\.1-1\.0\.1 \(patch\), build ok\n/);
   assert.match(r.out, /1\.21-lts {2}released 1\.21\.1-2\.0\.1 \(patch\), build ok, review: no changes\n/);
   assert.match(r.out, /26 {8}upmerge pushed \(there is no 26\.3 release yet\), build ok, review: no changes\n/);
@@ -188,6 +189,81 @@ test('starts at the given version', () => {
   assert.deepStrictEqual(originTags(), ['1.20.1-1.0.0', '1.21.1-2.0.0', '1.21.1-2.0.1']);
   assert.ok(!log().includes('mc20-lts'));
   assert.strictEqual(changelog('mc21-lts', '1.21.1-2.0.1'), `${HEADER}Fixes:\n* Fix crash\n`);
+});
+
+test('asks before pushing with --confirm, and continues after a no', () => {
+  setup();
+  // Start, bump 1.20, then say no at the final confirmation.
+  let r = chain(['--confirm', 'ModA'], 'y\n\nn\n');
+  assert.strictEqual(r.code, 1);
+  assert.match(r.out, /About to release ModA 1\.20-lts:\n {2}tag: {7}1\.20\.1-1\.0\.1 \(patch\)\n/);
+  assert.match(r.out, /branch: {4}master-1\.20-lts: only the release commit that cc-release makes\n/);
+  assert.match(r.out, /build: {5}ok\n/);
+  assert.match(r.out, /changelog:\n {4}\| As always, don't forget to backup your world before updating!\n {4}\| \n {4}\| Fixes:\n {4}\| \* Fix crash\n/);
+  assert.match(r.out, /Push this release\? \[y\]es \/ \[n\]o \(default: n\)/);
+  assert.match(r.out, /Stopped before pushing 1\.20\.1-1\.0\.1\./);
+  assert.deepStrictEqual(originTags(), ['1.20.1-1.0.0', '1.21.1-2.0.0']);
+
+  // Continue: start, confirm 1.20, bump 1.21, confirm 1.21.
+  r = chain(['--confirm', 'ModA'], 'y\ny\n\ny\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /Continuing with the bump to 1\.0\.1 from an earlier run\./);
+  assert.match(r.out, /About to release ModA 1\.21-lts:\n.*\n {2}branch: {4}master-1\.21-lts: 3 commits, plus the release commit that cc-release makes\n {13}[0-9a-f]+ Merge [\s\S]*Fix crash/);
+  assert.deepStrictEqual(originTags(), ['1.20.1-1.0.0', '1.20.1-1.0.1', '1.21.1-2.0.0', '1.21.1-2.0.1']);
+});
+
+test('rehearses everything on copies, without touching the origin or the checkouts', () => {
+  setup({ withNew: true });
+  const realOrigin = sb.path('origin', 'ModA.git');
+  const refs = () => sb.git(realOrigin, 'for-each-ref', '--format=%(refname) %(objectname)');
+  const before = refs();
+  const heads = ['mc20-lts', 'mc21-lts', 'mc26'].map(localHead);
+  // An ignored local file, like secrets.properties, is copied along.
+  const real20 = sb.path('mc20-lts', 'ModA');
+  sb.write(path.join(real20, '.git', 'info', 'exclude'), 'secrets.properties\n');
+  sb.write(path.join(real20, 'secrets.properties'), 'secret=1\n');
+
+  // Start, bump 1.20, bump 1.21, push the 26 upmerge (all to the stand-in origin).
+  const r = chain(['--rehearse', 'ModA'], 'y\n\n\n\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /Release chain for ModA \(rehearsal\):/);
+
+  assert.strictEqual(refs(), before, 'real origin unchanged');
+  assert.deepStrictEqual(['mc20-lts', 'mc21-lts', 'mc26'].map(localHead), heads, 'real checkouts unchanged');
+  for (const dir of ['mc20-lts', 'mc21-lts', 'mc26']) {
+    assert.ok(!fs.existsSync(sb.path(dir, 'ModA', '.git', 'cc-release-chain')), `no chain state in ${dir}`);
+  }
+
+  assert.match(r.out, /Rehearsal results \(nothing was pushed to the real origin\):/);
+  assert.match(r.out, /master-1\.20-lts: would push 1 commit\n {6}[0-9a-f]+ Bump mod version\n/);
+  assert.match(r.out, /master-26: would push \d+ commits/);
+  assert.match(r.out, /tag 1\.20\.1-1\.0\.1, changelog:\n[\s\S]*? {6}\| \* Fix crash\n/);
+  assert.match(r.out, /tag 1\.21\.1-2\.0\.1, changelog:/);
+
+  const rehearsals = fs.readdirSync(sb.path('state', 'rehearsals'));
+  assert.strictEqual(rehearsals.length, 1);
+  const root = sb.path('state', 'rehearsals', rehearsals[0]);
+  assert.ok(r.out.includes(`Rehearsal copies: ${root}`));
+  assert.strictEqual(sb.read(path.join(root, 'mc20-lts', 'ModA', 'secrets.properties')), 'secret=1\n');
+  assert.ok(fs.existsSync(path.join(root, 'mc20-lts', 'ModA', '.git', 'cc-release-chain', 'build.log')), 'built in the copy');
+  const standIn = sb.git(path.join(root, 'origin', 'ModA.git'), 'tag', '-l').split('\n').filter(Boolean).sort();
+  assert.deepStrictEqual(standIn, ['1.20.1-1.0.0', '1.20.1-1.0.1', '1.21.1-2.0.0', '1.21.1-2.0.1']);
+});
+
+test('removes a rehearsal that ends before doing anything', () => {
+  setup();
+  const rehearsals = () => fs.readdirSync(sb.path('state', 'rehearsals'));
+  // Declined at the start.
+  let r = chain(['--rehearse', 'ModA'], 'n\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(rehearsals(), []);
+  // Nothing to release, after really releasing everything.
+  r = chain(['ModA'], 'y\n\n\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  r = chain(['--rehearse', 'ModA'], '');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /Nothing to release for ModA\./);
+  assert.deepStrictEqual(rehearsals(), []);
 });
 
 test('refuses to run twice for the same mod', () => {
