@@ -67,11 +67,20 @@ fi
 # Tag
 echo "Tagging..."
 git tag -s $tag -m "Release $tag"
+if [ $? -ne 0 ]; then
+    echo "Error: Tagging failed, nothing was pushed."
+    exit 1
+fi
 
-# Push
+# Push branch and tag together, so a rejected branch push can't leave a published tag behind
 echo "Pushing tag and branches..."
-git push origin $tag
-git push origin $masterbranch
+git push --atomic origin "refs/heads/$masterbranch" "refs/tags/$tag"
+if [ $? -ne 0 ]; then
+    echo "Error: Push failed, so nothing was pushed (tag $tag only exists locally)."
+    echo "If the remote branch moved on: git tag -d $tag && git pull origin $masterbranch, then run cc-release again."
+    echo "Otherwise, fix the problem and run: git push --atomic origin refs/heads/$masterbranch refs/tags/$tag"
+    exit 1
+fi
 #git push origin $releasebranch
 
 git checkout $masterbranch
