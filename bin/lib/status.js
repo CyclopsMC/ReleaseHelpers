@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { git, gitOrNull, runPool } = require('./git');
 const { listCommits, partition } = require('./commits');
+const { readPropsAt } = require('./props');
 
 const FETCH_TIMEOUT_MS = 120000;
 
@@ -62,23 +63,6 @@ function checkVersionDirs(config) {
     else if (src.trim() !== expected) warnings.push(`${file} says ${src.trim()}, but the version before it in the config is ${expected}`);
   });
   return warnings;
-}
-
-function parseProps(text) {
-  const props = {};
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*([^#!\s=:][^=:\s]*)\s*[=:]\s*(.*)$/.exec(line);
-    if (m) props[m[1]] = m[2].trim();
-  }
-  return props;
-}
-
-async function readPropsAt(repoDir, ref) {
-  for (const f of ['gradle.properties', 'build.properties']) {
-    const text = await gitOrNull(repoDir, ['show', `${ref}:${f}`]);
-    if (text !== null && /^mod_version\s*=/m.test(text)) return parseProps(text);
-  }
-  return {};
 }
 
 async function fetchRefspecs(repoDir, refspecs) {
@@ -193,4 +177,4 @@ function chainStart(cells) {
   return cells.findIndex(c => cellUserFacing(c).length > 0);
 }
 
-module.exports = { discoverMods, checkVersionDirs, computeStatus, chainStart, cellUserFacing, parseProps };
+module.exports = { discoverMods, checkVersionDirs, computeStatus, cellStatus, chainStart, cellUserFacing };
