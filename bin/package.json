@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test ../test/*.test.js"
+    "test": "node --test ../test/*.test.js",
+    "test:real": "node --test ../test/real/*.test.js"
   },
   "author": "Ruben Taelman <rubensworks@gmail.com> (http://rubensworks.net)",
   "license": "MIT",
