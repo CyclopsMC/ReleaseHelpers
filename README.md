@@ -187,7 +187,7 @@ cc-release-chain --rehearse IntegratedDynamics
 Runs the whole chain for real (Gradle, Claude, your editor, signing, upmerges and the release commits) on copies of your checkouts, whose `origin` is a local stand-in for the real one. Nothing is pushed to the real origin, so nothing gets published, and your checkouts are not changed (they only fetch).
 
 - The stand-in origin starts with the state each checkout just fetched; the copies start at your local branches, including unpushed commits, but without uncommitted changes.
-- Local git settings for merging and signing, and small ignored files like `secrets.properties`, are copied along.
+- Local git settings for merging and signing, and small ignored files like `secrets.properties`, are copied along. Submodules (like CommonCapabilitiesAPI) are set up from your checkouts, or else from their URLs.
 - At the end it shows what would have been pushed: the commits per branch and the new tags with their changelogs.
 - The copies are kept under `~/.cache/cc-helpers/rehearsals/` for inspection. They share git objects with your checkouts (so they are quick to make), but their builds take space: delete them when done.
 - The first build in a copy is a cold one (no `build/` dir yet), so it takes longer than usual.

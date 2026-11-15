@@ -250,6 +250,36 @@ test('rehearses everything on copies, without touching the origin or the checkou
   assert.deepStrictEqual(standIn, ['1.20.1-1.0.0', '1.20.1-1.0.1', '1.21.1-2.0.0', '1.21.1-2.0.1']);
 });
 
+test('sets up submodules in rehearsal copies, from the checkouts', () => {
+  setup();
+  // An API submodule, like CommonCapabilitiesAPI in several mods.
+  const api = sb.newMod('Api');
+  sb.commit(api, 'API', { 'Api.java': 'api\n' });
+  sb.git(api, 'push', '-q', 'origin', 'main');
+  const w = sb.path('work', 'ModA');
+  sb.git(w, 'checkout', '-q', 'master-1.20-lts');
+  sb.git(w, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', sb.path('origin', 'Api.git'), 'src/api');
+  sb.commit(w, 'Add API submodule');
+  sb.git(w, 'push', '-q', 'origin', 'master-1.20-lts');
+  const real = sb.path('mc20-lts', 'ModA');
+  sb.git(real, 'pull', '-q', '--ff-only');
+  sb.git(real, '-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'update', '--init');
+  // Without the API origin, only the checkout's submodule can provide it.
+  fs.rmSync(sb.path('origin', 'Api.git'), { recursive: true });
+
+  const r = chain(['--rehearse', 'ModA', '1.20-lts'], 'n\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(!r.out.includes('could not be set up'), r.out);
+  const root = sb.path('state', 'rehearsals');
+  assert.deepStrictEqual(fs.readdirSync(root), [], 'declined, so removed again');
+
+  // Keep the copies this time, by stopping at the bump prompt.
+  const kept = chain(['--rehearse', 'ModA', '1.20-lts'], 'y\n');
+  assert.strictEqual(kept.code, 1);
+  const [dir] = fs.readdirSync(root);
+  assert.strictEqual(sb.read(path.join(root, dir, 'mc20-lts', 'ModA', 'src', 'api', 'Api.java')), 'api\n');
+});
+
 test('removes a rehearsal that ends before doing anything', () => {
   setup();
   const rehearsals = () => fs.readdirSync(sb.path('state', 'rehearsals'));

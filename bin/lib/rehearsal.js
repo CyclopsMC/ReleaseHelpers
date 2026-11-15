@@ -33,6 +33,31 @@ async function copyIgnoredFiles(from, to) {
   }
 }
 
+// Submodules (e.g. CommonCapabilitiesAPI) are cloned from the real checkout's submodules,
+// or else from their URLs in .gitmodules. Returns a problem description, or null.
+async function initSubmodules(real, copy) {
+  if (!fs.existsSync(path.join(copy, '.gitmodules'))) return null;
+  const paths = lines(await gitOrNull(copy, ['config', '-f', '.gitmodules', '--get-regexp', '^submodule\\..*\\.path$']));
+  for (const entry of paths) {
+    const space = entry.indexOf(' ');
+    const name = entry.slice('submodule.'.length, space - '.path'.length);
+    const local = path.join(real, entry.slice(space + 1));
+    if (fs.existsSync(path.join(local, '.git'))) await git(copy, ['config', `submodule.${name}.url`, local]);
+  }
+  try {
+    await git(copy, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', '--quiet']);
+    return null;
+  } catch (e) {
+    try {
+      await git(copy, ['submodule', 'sync', '--recursive', '--quiet']);
+      await git(copy, ['submodule', 'update', '--init', '--recursive', '--quiet']);
+      return null;
+    } catch (e2) {
+      return `the submodules of ${copy} could not be set up, so its build may fail: ${e2.message}`;
+    }
+  }
+}
+
 async function refsOf(repo) {
   const out = await git(repo, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads', 'refs/tags']);
   return new Map(lines(out).map(l => l.split(' ')));
@@ -83,6 +108,8 @@ async function createRehearsal(config, found, mod, log = console.log) {
     await git(copy, ['fetch', '--quiet', '--prune', '--tags', 'origin']);
     await copyLocalConfig(real, copy);
     await copyIgnoredFiles(real, copy);
+    const problem = await initSubmodules(real, copy);
+    if (problem) notes.push(problem);
     if (await gitOrNull(real, ['status', '--porcelain', '--untracked-files=no'])) {
       notes.push(`uncommitted changes in ${real} are not part of the rehearsal`);
     }
