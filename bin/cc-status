@@ -1,0 +1,200 @@
+#!/usr/bin/env node
+'use strict';
+// Shows which mods need a release (or upmerge) on which maintained MC versions.
+
+const { loadConfig } = require('./lib/config');
+const { discoverMods, checkVersionDirs, computeStatus, chainStart, cellUserFacing } = require('./lib/status');
+
+const HELP = `Usage: cc-status [options] [mod...]
+
+Shows which mods need a release or upmerge, per maintained MC version.
+Mods are the git checkouts found in the version dirs of ~/.config/cc-helpers.json.
+
+Options:
+  -v, --verbose     List the commits behind each cell, and the ones the filter dropped
+  --no-fetch        Don't fetch; use the current remote-tracking branches
+  -j, --jobs <n>    Number of repos to process in parallel (default 8)
+  --list-mods       Print the mod names (used by shell completion)
+  --list-versions   Print the version names (used by shell completion)
+  -h, --help        Show this help
+`;
+
+function parseArgs(argv) {
+  const opts = { verbose: false, fetch: true, jobs: null, mods: [], list: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-v' || a === '--verbose') opts.verbose = true;
+    else if (a === '--no-fetch') opts.fetch = false;
+    else if (a === '-j' || a === '--jobs') {
+      const n = Number(argv[++i]);
+      if (!Number.isInteger(n) || n < 1) fail(`${a} needs a positive number`);
+      opts.jobs = n;
+    } else if (a === '--list-mods') opts.list = 'mods';
+    else if (a === '--list-versions') opts.list = 'versions';
+    else if (a === '-h' || a === '--help') {
+      process.stdout.write(HELP);
+      process.exit(0);
+    } else if (a.startsWith('-')) fail(`Unknown option ${a}\n\n${HELP}`);
+    else opts.mods.push(a);
+  }
+  return opts;
+}
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = code => s => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
+const bold = paint('1');
+const dim = paint('2');
+const red = paint('31');
+const yellow = paint('33');
+
+function cellText(cell) {
+  if (cell.missing) return '-';
+  if (cell.error) return '?';
+  let t = '';
+  if (!cell.lastRelease) t = 'new';
+  else if (cell.unreleased.userFacing.length) t = String(cell.unreleased.userFacing.length);
+  if (cell.pending.userFacing.length) t += `↑${cell.pending.userFacing.length}`;
+  const commits = cellUserFacing(cell);
+  if (commits.length && commits.every(c => c.kind === 'translations')) t += 't';
+  if (!t) t = '.';
+  if (cell.local.length) t += '!';
+  return t;
+}
+
+function colorCell(text, cell) {
+  if (cell.error || text.endsWith('!')) return red(text);
+  if (cellUserFacing(cell).length) return yellow(text);
+  return dim(text);
+}
+
+function printTable(config, mods, status) {
+  const nameWidth = Math.max(...mods.map(m => m.length));
+  const texts = mods.map(m => status[m].map(cellText));
+  const widths = config.versions.map((v, i) => Math.max(v.name.length, ...texts.map(row => row[i].length)) + 2);
+  let header = ' '.repeat(nameWidth);
+  config.versions.forEach((v, i) => { header += v.name.padStart(widths[i]); });
+  console.log(bold(header));
+  mods.forEach((m, r) => {
+    let line = m.padEnd(nameWidth);
+    status[m].forEach((cell, i) => { line += ' '.repeat(widths[i] - texts[r][i].length) + colorCell(texts[r][i], cell); });
+    console.log(line);
+  });
+  console.log(dim('\nN: unreleased commits  ↑N: commits to upmerge from lower versions  t: only translations\n'
+    + 'new: no release on this MC version yet  !: local checkout needs attention (see -v)  -: no checkout  ?: error'));
+}
+
+function printTodo(config, mods, status) {
+  const groups = config.versions.map(() => []);
+  const translationGroups = config.versions.map(() => []);
+  for (const m of mods) {
+    const start = chainStart(status[m]);
+    if (start < 0) continue;
+    const commits = status[m].slice(start).flatMap(cellUserFacing);
+    (commits.every(c => c.kind === 'translations') ? translationGroups : groups)[start].push(m);
+  }
+  const print = (title, gs) => {
+    if (!gs.some(g => g.length)) return;
+    console.log(bold(`\n${title}`));
+    gs.forEach((g, i) => { if (g.length) console.log(`${config.versions[i].name}: ${g.join(', ')}`); });
+  };
+  if (!groups.some(g => g.length) && !translationGroups.some(g => g.length)) {
+    console.log(bold('\nNothing to release.'));
+    return;
+  }
+  print('To do, by lowest MC version:', groups);
+  print('Only translations:', translationGroups);
+}
+
+function printCommits(title, commits, withReason) {
+  if (!commits.length) return;
+  console.log(`    ${title}:`);
+  for (const c of commits) {
+    console.log(`      ${dim(c.hash.slice(0, 9))} ${c.subject}${withReason ? dim(` (${c.reason})`) : ''}`);
+  }
+}
+
+function printVerbose(config, mods, status) {
+  for (const m of mods) {
+    const lines = [];
+    status[m].forEach((cell, i) => {
+      if (cell.missing) return;
+      const hasContent = cell.error || cell.local.length || cell.pending.userFacing.length || cell.pending.dropped.length
+        || (cell.unreleased && (cell.unreleased.userFacing.length || cell.unreleased.dropped.length));
+      if (hasContent) lines.push(i);
+    });
+    if (!lines.length) continue;
+    console.log(bold(`\n${m}`));
+    for (const i of lines) {
+      const cell = status[m][i];
+      const v = config.versions[i];
+      if (cell.error) {
+        console.log(`  ${v.name}: ${red(cell.error)}`);
+        continue;
+      }
+      console.log(`  ${v.name} ${dim(cell.lastRelease ? `(last release ${cell.lastRelease})` : `(no ${cell.mc} release yet)`)}`);
+      if (cell.unreleased) printCommits('unreleased', cell.unreleased.userFacing, false);
+      printCommits('to upmerge', cell.pending.userFacing, false);
+      const dropped = (cell.unreleased ? cell.unreleased.dropped : []).concat(cell.pending.dropped);
+      printCommits('dropped by filter', dropped, true);
+      for (const issue of cell.local) console.log(`    ${red(`local: ${issue}`)}`);
+    }
+  }
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    fail(e.message);
+  }
+  if (opts.list === 'versions') {
+    config.versions.forEach(v => console.log(v.name));
+    return;
+  }
+  const found = discoverMods(config);
+  if (opts.list === 'mods') {
+    found.mods.forEach(m => console.log(m));
+    return;
+  }
+
+  for (const w of checkVersionDirs(config)) process.stderr.write(`${yellow('Warning:')} ${w}\n`);
+  let mods = found.mods;
+  if (opts.mods.length) {
+    mods = [...new Set(opts.mods.map(arg => {
+      const match = found.mods.find(m => m.toLowerCase() === arg.toLowerCase());
+      if (!match) fail(`Unknown mod ${arg}. Known mods: ${found.mods.join(', ')}`);
+      return match;
+    }))];
+  }
+  if (!mods.length) fail(`No mod checkouts found in the version dirs of ${config.file}`);
+
+  const progress = process.stderr.isTTY
+    ? (done, total) => process.stderr.write(`\r${opts.fetch ? 'Fetching and checking' : 'Checking'} ${done}/${total}...`)
+    : null;
+  const status = await computeStatus(config, { mods, byVersion: found.byVersion }, {
+    fetch: opts.fetch,
+    jobs: opts.jobs || config.jobs || 8,
+    onProgress: progress,
+  });
+  if (progress) process.stderr.write('\r\x1b[K');
+
+  printTable(config, mods, status);
+  printTodo(config, mods, status);
+  if (opts.verbose) printVerbose(config, mods, status);
+
+  const errors = mods.flatMap(m => status[m].map((c, i) => (c.error ? `${m} ${config.versions[i].name}: ${c.error}` : null))).filter(Boolean);
+  if (errors.length) {
+    console.log(red(bold('\nErrors:')));
+    errors.forEach(e => console.log(red(`  ${e}`)));
+    process.exitCode = 1;
+  }
+}
+
+main().catch(e => fail(e.stack || e.message));
