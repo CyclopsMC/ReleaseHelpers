@@ -5,7 +5,7 @@ set -e
 
 if [ ! -f ../.upmerge-src-branch ]; then
     echo "Error!"
-    echo "Can't find $file!"
+    echo "Can't find ../.upmerge-src-branch!"
     exit 1
 fi
 
