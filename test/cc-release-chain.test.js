@@ -280,6 +280,18 @@ test('sets up submodules in rehearsal copies, from the checkouts', () => {
   assert.strictEqual(sb.read(path.join(root, dir, 'mc20-lts', 'ModA', 'src', 'api', 'Api.java')), 'api\n');
 });
 
+test('refuses to rehearse when a release tag differs from origin', () => {
+  setup();
+  const w = sb.path('work', 'ModA');
+  sb.git(w, 'tag', '-f', '1.20.1-1.0.0', 'master-1.20-lts');
+  sb.git(w, 'push', '-q', '-f', 'origin', 'refs/tags/1.20.1-1.0.0');
+  const r = chain(['--rehearse', 'ModA'], 'y\n');
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err, /mc20-lts\/ModA: tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
+  assert.match(r.err, /as a real chain would refuse to start too/);
+  assert.deepStrictEqual(fs.readdirSync(sb.path('state', 'rehearsals')), []);
+});
+
 test('removes a rehearsal that ends before doing anything', () => {
   setup();
   const rehearsals = () => fs.readdirSync(sb.path('state', 'rehearsals'));

@@ -600,6 +600,10 @@ async function main() {
     console.log(c.bold(`Setting up a rehearsal for ${mod}: nothing will be pushed to the real origin.`));
     rehearsal = await createRehearsal(config, found, mod);
     for (const n of rehearsal.notes) console.log(`${c.yellow('Note:')} ${n}`);
+    if (rehearsal.problems.length) {
+      fs.rmSync(rehearsal.root, { recursive: true, force: true });
+      fail(`${rehearsal.problems.map(p => `${c.red('Problem:')} ${p}`).join('\n')}\nFix these first, as a real chain would refuse to start too.`);
+    }
     config = rehearsal.config;
     found = discoverMods(config);
   } else if (!tryLock(modLockDir(mod))) {
