@@ -51,7 +51,10 @@ function loadConfig() {
       throw new Error(`${file}: invalid regex in "devOnlyPaths": ${r}`);
     }
   });
-  return { ...json, file, versions, devOnlyPaths };
+  const ignoreCommits = (json.ignoreCommits || []).map(h => String(h).trim().toLowerCase());
+  const bad = ignoreCommits.find(h => !/^[0-9a-f]{7,40}$/.test(h));
+  if (bad !== undefined) throw new Error(`${file}: "ignoreCommits" needs commit hashes of at least 7 characters, not "${bad}"`);
+  return { ...json, file, versions, devOnlyPaths, ignoreCommits, commitFilter: { devOnlyPaths, ignoreCommits } };
 }
 
 module.exports = { loadConfig, configPath };

@@ -2,6 +2,7 @@
 // Release status of mods across the maintained MC versions.
 
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const { git, gitOrNull, runPool } = require('./git');
 const { listCommits, partition } = require('./commits');
@@ -30,8 +31,29 @@ function isModRepo(dir) {
     .some(f => /^mod_version\s*=/m.test(readFileOrNull(path.join(dir, f)) || ''));
 }
 
-// Mod names (sorted), and per version index the set of mods checked out there.
+// Repository name of origin, e.g. "EvilCraft" for git@github.com:CyclopsMC/EvilCraft.git.
+function originName(dir) {
+  let url = null;
+  const config = readFileOrNull(path.join(dir, '.git', 'config'));
+  if (config !== null) {
+    const section = /\[remote "origin"\]([^[]*)/.exec(config);
+    const m = section && /^\s*url\s*=\s*(.+?)\s*$/m.exec(section[1]);
+    url = m ? m[1] : null;
+  } else {
+    // A worktree or submodule-style .git file.
+    try {
+      url = execFileSync('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch (e) {
+      url = null;
+    }
+  }
+  return url ? url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:\\]/).pop() : null;
+}
+
+// Mod names (sorted), per version index the set of mods checked out there, and the checkouts
+// that were skipped because they aren't named after their origin repository (e.g. temporary copies).
 function discoverMods(config) {
+  const skipped = [];
   const byVersion = config.versions.map(v => {
     let names = [];
     try {
@@ -39,11 +61,18 @@ function discoverMods(config) {
     } catch (e) {
       // Missing version dir is reported by checkVersionDirs.
     }
-    return new Set(names.filter(n => !n.startsWith('.') && isDir(path.join(v.dir, n)) && isModRepo(path.join(v.dir, n))));
+    return new Set(names.filter(n => {
+      const dir = path.join(v.dir, n);
+      if (n.startsWith('.') || !isDir(dir) || !isModRepo(dir)) return false;
+      const origin = originName(dir);
+      if (origin && origin.toLowerCase() === n.toLowerCase()) return true;
+      skipped.push({ version: v.name, name: n, origin });
+      return false;
+    }));
   });
   const mods = [...new Set(byVersion.flatMap(s => [...s]))]
     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-  return { mods, byVersion };
+  return { mods, byVersion, skipped };
 }
 
 // Problems with the version dirs that cc-upmerge would trip over.
@@ -149,7 +178,7 @@ async function localIssues(repoDir, branch, remoteRef) {
 //   lastRelease: tag of the last release on this MC version, or null if there is none yet
 //   unreleased:  commits since lastRelease (null if no release yet)
 //   pending:     commits on lower maintained branches that this branch lacks
-async function cellStatus({ repoDir, version, lowerBranches, fetch, devOnlyPaths }) {
+async function cellStatus({ repoDir, version, lowerBranches, fetch, filter }) {
   const clobbered = fetch ? await fetchBranches(repoDir, version.branch, lowerBranches) : [];
   const ref = `refs/remotes/origin/${version.branch}`;
   if (!(await refExists(repoDir, ref))) throw new Error(`origin/${version.branch} not found`);
@@ -167,14 +196,16 @@ async function cellStatus({ repoDir, version, lowerBranches, fetch, devOnlyPaths
     if (await refExists(repoDir, `refs/remotes/origin/${b}`)) lowerRefs.push(`refs/remotes/origin/${b}`);
   }
   const unreleased = lastRelease
-    ? partition(await listCommits(repoDir, [`refs/tags/${lastRelease}..${ref}`]), devOnlyPaths)
+    ? partition(await listCommits(repoDir, [`refs/tags/${lastRelease}..${ref}`]), filter)
     : null;
   const pending = lowerRefs.length
-    ? partition(await listCommits(repoDir, [...lowerRefs, `^${ref}`]), devOnlyPaths)
-    : partition([], devOnlyPaths);
+    ? partition(await listCommits(repoDir, [...lowerRefs, `^${ref}`]), filter)
+    : partition([], filter);
   const local = await localIssues(repoDir, version.branch, ref);
-  if (clobbered.length) local.push(describeClobbered(clobbered));
-  return { mc, modVersion, lastRelease, unreleased, pending, local };
+  // The last release decides what counts as unreleased; other differing tags don't matter here.
+  if (lastRelease && clobbered.includes(lastRelease)) local.push(describeClobbered([lastRelease]));
+  const otherDifferingTags = clobbered.filter(t => t !== lastRelease);
+  return { mc, modVersion, lastRelease, unreleased, pending, local, otherDifferingTags };
 }
 
 // User-facing commits that a release chain starting here would pick up.
@@ -195,7 +226,7 @@ async function computeStatus(config, { mods, byVersion }, { fetch = true, jobs =
       const repoDir = path.join(version.dir, mod);
       tasks.push(async () => {
         try {
-          status[mod][i] = await cellStatus({ repoDir, version, lowerBranches, fetch, devOnlyPaths: config.devOnlyPaths });
+          status[mod][i] = await cellStatus({ repoDir, version, lowerBranches, fetch, filter: config.commitFilter });
         } catch (error) {
           status[mod][i] = { error: error.message };
         }
