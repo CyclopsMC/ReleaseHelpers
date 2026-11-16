@@ -278,4 +278,35 @@ function chainStart(cells) {
   return cells.findIndex(c => cellUserFacing(c).length > 0);
 }
 
-module.exports = { discoverMods, checkVersionDirs, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, fetchBranches };
+// What a mod needs: { start, group } with group 'todo', 'translations' or 'upmerge', or null
+// when there is nothing to do.
+function modWork(cells) {
+  const start = chainStart(cells);
+  if (start < 0) return { start, group: null };
+  if (isUpmergeOnly(cells)) return { start, group: 'upmerge' };
+  const commits = cells.slice(start).flatMap(cellUserFacing);
+  return { start, group: commits.every(c => c.kind === 'translations') ? 'translations' : 'todo' };
+}
+
+// The short text of a cell, as in the cc-status table.
+function cellText(cell, upmergeOnly) {
+  if (cell.missing) return '-';
+  if (cell.error) return '?';
+  let t = '';
+  if (!cell.lastRelease) {
+    if (!upmergeOnly) t = 'new';
+  } else if (cell.unreleased.userFacing.length) {
+    t = String(cell.unreleased.userFacing.length);
+  }
+  if (cell.pending.userFacing.length) t += `↑${cell.pending.userFacing.length}`;
+  const commits = cellUserFacing(cell);
+  if (commits.length && commits.every(c => c.kind === 'translations')) t += 't';
+  if (!t) t = '.';
+  if (cell.local.length) t += '!';
+  return t;
+}
+
+module.exports = {
+  discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing,
+  isUpmergeOnly, modWork, cellText, fetchBranches, originUrl,
+};

@@ -9,7 +9,7 @@ _cc_status() {
     return
   fi
   if [[ "$cur" == -* ]]; then
-    COMPREPLY=($(compgen -W "-v --verbose --no-fetch --fetch-all -j --jobs -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "-v --verbose --no-fetch --fetch-all --no-dashboard -j --jobs -h --help" -- "$cur"))
   else
     COMPREPLY=($(compgen -W "$(cc-status --list-mods 2>/dev/null)" -- "$cur"))
   fi
@@ -52,3 +52,16 @@ _cc_mark() {
 }
 
 complete -F _cc_mark cc-mark
+
+_cc_dashboard() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  if [[ "${COMP_WORDS[COMP_CWORD-1]}" == "--port" ]]; then
+    COMPREPLY=()
+  elif [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "--port --open -h --help" -- "$cur"))
+  else
+    COMPREPLY=($(compgen -W "open install uninstall" -- "$cur"))
+  fi
+}
+
+complete -F _cc_dashboard cc-dashboard

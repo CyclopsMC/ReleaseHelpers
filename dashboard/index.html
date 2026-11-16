@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="cc-token" content="__CC_TOKEN__">
+<title>CC status</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%23d4881c'/%3E%3Cpath d='M10 16.5l4 4 8-9' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">CC status</div>
+  <div class="summary" id="summary"></div>
+  <div class="spacer"></div>
+  <div class="sync" id="sync" aria-live="polite"></div>
+  <button class="btn" id="refresh" title="Ask GitHub what changed and fetch it. Shift-click: fetch every checkout.">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Refresh
+  </button>
+</header>
+<div class="progress" id="progress"></div>
+<main>
+  <div id="banner"></div>
+  <div class="table-wrap"><table class="grid" id="grid"></table></div>
+  <div class="groups" id="groups"></div>
+  <div id="problems"></div>
+  <p class="legend">
+    <b>N</b> unreleased commits &middot; <b>&uarr;N</b> commits to upmerge from lower versions &middot; <b>t</b> only translations &middot;
+    <b>new</b> no release on this MC version yet &middot; <b>!</b> the checkout needs attention &middot; <b>-</b> no checkout &middot; <b>?</b> error.
+    The marked cell of a row is where a release chain starts. Click a cell to see its commits.
+  </p>
+</main>
+<aside class="panel" id="panel" hidden></aside>
+<script src="/app.js"></script>
+</body>
+</html>

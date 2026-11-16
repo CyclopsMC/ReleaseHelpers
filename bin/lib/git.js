@@ -3,7 +3,9 @@
 
 const { execFile, spawn } = require('child_process');
 
-const GIT_ENV = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' });
+// No credential prompts, messages in English, and no index writes by `git status`, so watching a
+// checkout (cc-dashboard) doesn't trigger itself.
+const GIT_ENV = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' });
 
 function git(cwd, args, { timeout = 0 } = {}) {
   return new Promise((resolve, reject) => {
@@ -11,7 +13,6 @@ function git(cwd, args, { timeout = 0 } = {}) {
       cwd,
       timeout,
       maxBuffer: 512 * 1024 * 1024,
-      // Never block on credential prompts; parse messages in English.
       env: GIT_ENV(),
     }, (err, stdout, stderr) => {
       if (err) {

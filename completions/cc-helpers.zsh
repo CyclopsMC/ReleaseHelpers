@@ -22,6 +22,7 @@ _cc_status() {
     '(-v --verbose)'{-v,--verbose}'[list the commits behind each cell]' \
     '--no-fetch[use the current remote-tracking branches]' \
     '--fetch-all[fetch every checkout, without asking GitHub what changed]' \
+    '--no-dashboard[do not use a running cc-dashboard]' \
     '(-j --jobs)'{-j,--jobs}'[number of repos to process in parallel]:jobs:' \
     '(- *)'{-h,--help}'[show help]' \
     '*:mod:_cc_helpers_mods'
@@ -59,7 +60,16 @@ _cc_build() {
     '(- *)'{-h,--help}'[show help]'
 }
 
+_cc_dashboard() {
+  _arguments -s \
+    '--port[port to listen on]:port:' \
+    '--open[open the page once it runs]' \
+    '(- *)'{-h,--help}'[show help]' \
+    '1:command:((open\:"open the page" install\:"run in the background, also after login" uninstall\:"stop running in the background"))'
+}
+
 compdef _cc_status cc-status
+compdef _cc_dashboard cc-dashboard
 compdef _cc_release_chain cc-release-chain
 compdef _cc_build cc-build
 compdef _cc_mark cc-mark

@@ -4,7 +4,7 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-status`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-status`, `cc-dashboard`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
@@ -95,6 +95,7 @@ Options:
 - `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
 - `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
 - `--fetch-all`: fetch every checkout, without asking GitHub what changed first.
+- `--no-dashboard`: don't use a running `cc-dashboard`, see below.
 
 With a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the one of the [GitHub CLI](https://cli.github.com/), `gh auth login`), `cc-status` first asks GitHub for the branches and recent tags of all mods in one request, and only fetches the checkouts where something changed.
 Without a token, it fetches every checkout.
@@ -115,6 +116,29 @@ For the commits it can't tell apart, e.g. a build change that also touched a sou
   Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash: upmerges keep hashes, so one mark covers all MC versions.
 
 `cc-status -v` shows which commits were dropped and why, including your marks.
+
+## cc-dashboard
+
+The `cc-status` table as a page that stays up to date, to keep open in a browser tab:
+
+```bash
+cc-dashboard install
+```
+```bash
+cc-dashboard open
+```
+
+`install` runs it in the background from now on, also after login (macOS); `cc-dashboard uninstall` stops that. You can also just run `cc-dashboard` in a terminal.
+
+- It watches the `.git` folder of every checkout, so commits, branch switches, fetches and upmerges show within a second. Edits in the working tree (the `!` for uncommitted changes) show within a minute, or as soon as you look at the page.
+- Every 2 minutes it asks GitHub what changed, and fetches only those checkouts, like `cc-status`. Once an hour it fetches everything. Without a GitHub token, it fetches everything every 10 minutes. It doesn't fetch the checkouts of a mod while a release chain for that mod runs.
+- **Refresh** asks GitHub and fetches right away; Shift-click fetches every checkout.
+- Click a cell to see its commits: the unreleased ones, the ones to upmerge, and the ones the filter left out (with the reason). Click a commit for its message, files and diff.
+- The tab title shows how many mods have work, e.g. `(3) CC status`.
+- While it runs, `cc-status` is instant: it shows the dashboard's status, after asking it to fetch what changed.
+- It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
+
+Optional settings, in seconds, under `"dashboard"` in the config: `port` (default 7341), `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600) and `fetchAllWithoutGitHub` (600).
 
 ## Changelog drafts
 

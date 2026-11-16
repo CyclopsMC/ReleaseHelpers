@@ -3,7 +3,8 @@
 // Shows which mods need a release (or upmerge) on which maintained MC versions.
 
 const { loadConfig } = require('./lib/config');
-const { discoverMods, checkVersionDirs, computeStatus, planFetches, chainStart, cellUserFacing, isUpmergeOnly } = require('./lib/status');
+const { runningDashboard, call } = require('./lib/dashboard-client');
+const { discoverMods, checkVersionDirs, computeStatus, planFetches, cellUserFacing, isUpmergeOnly, modWork, cellText } = require('./lib/status');
 
 const HELP = `Usage: cc-status [options] [mod...]
 
@@ -14,6 +15,7 @@ Options:
   -v, --verbose     List the commits behind each cell, and the ones the filter dropped
   --no-fetch        Don't fetch; use the current remote-tracking branches
   --fetch-all       Fetch every checkout, instead of only those GitHub reports changes for
+  --no-dashboard    Don't use a running cc-dashboard; check everything here
   -j, --jobs <n>    Number of repos to process in parallel (default 8)
   --list-mods       Print the mod names (used by shell completion)
   --list-versions   Print the version names (used by shell completion)
@@ -21,12 +23,13 @@ Options:
 `;
 
 function parseArgs(argv) {
-  const opts = { verbose: false, fetch: true, fetchAll: false, jobs: null, mods: [], list: null };
+  const opts = { verbose: false, fetch: true, fetchAll: false, dashboard: true, jobs: null, mods: [], list: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-v' || a === '--verbose') opts.verbose = true;
     else if (a === '--no-fetch') opts.fetch = false;
     else if (a === '--fetch-all') opts.fetchAll = true;
+    else if (a === '--no-dashboard') opts.dashboard = false;
     else if (a === '-j' || a === '--jobs') {
       const n = Number(argv[++i]);
       if (!Number.isInteger(n) || n < 1) fail(`${a} needs a positive number`);
@@ -53,23 +56,6 @@ const bold = paint('1');
 const dim = paint('2');
 const red = paint('31');
 const yellow = paint('33');
-
-function cellText(cell, upmergeOnly) {
-  if (cell.missing) return '-';
-  if (cell.error) return '?';
-  let t = '';
-  if (!cell.lastRelease) {
-    if (!upmergeOnly) t = 'new';
-  } else if (cell.unreleased.userFacing.length) {
-    t = String(cell.unreleased.userFacing.length);
-  }
-  if (cell.pending.userFacing.length) t += `↑${cell.pending.userFacing.length}`;
-  const commits = cellUserFacing(cell);
-  if (commits.length && commits.every(c => c.kind === 'translations')) t += 't';
-  if (!t) t = '.';
-  if (cell.local.length) t += '!';
-  return t;
-}
 
 function colorCell(text, cell) {
   if (cell.error || text.endsWith('!')) return red(text);
@@ -98,12 +84,10 @@ function printTodo(config, mods, status) {
   const groups = config.versions.map(() => []);
   const translationGroups = config.versions.map(() => []);
   const upmergeGroups = config.versions.map(() => []);
+  const byGroup = { todo: groups, translations: translationGroups, upmerge: upmergeGroups };
   for (const m of mods) {
-    const start = chainStart(status[m]);
-    if (start < 0) continue;
-    const commits = status[m].slice(start).flatMap(cellUserFacing);
-    if (isUpmergeOnly(status[m])) upmergeGroups[start].push(m);
-    else (commits.every(c => c.kind === 'translations') ? translationGroups : groups)[start].push(m);
+    const { start, group } = modWork(status[m]);
+    if (group) byGroup[group][start].push(m);
   }
   const print = (title, gs) => {
     if (!gs.some(g => g.length)) return;
@@ -163,38 +147,37 @@ function printVerbose(config, mods, status) {
   }
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
-  let config;
+// The status from a running cc-dashboard, after it fetched what changed. Null without one.
+async function fromDashboard(config, mods, opts) {
+  const info = runningDashboard(config.file);
+  if (!info) return null;
   try {
-    config = loadConfig();
+    if (opts.fetch) {
+      if (process.stderr.isTTY) process.stderr.write('Asking cc-dashboard to refresh...');
+      // Without the GitHub check, only fetching everything is as fresh as cc-status on its own.
+      const { refresh } = await call(info, 'GET', '/api/state', null, 10000);
+      const kind = opts.fetchAll || refresh.github !== 'ok' ? 'full' : 'remote';
+      await call(info, 'POST', '/api/refresh', { kind, wait: true });
+      if (process.stderr.isTTY) process.stderr.write('\r\x1b[K');
+    }
+    const snapshot = await call(info, 'GET', '/api/state', null, 10000);
+    const byName = new Map(snapshot.mods.map(m => [m.name, m]));
+    // Still starting up, or it doesn't know a mod yet.
+    if (mods.some(m => !byName.has(m) || byName.get(m).loading)) return null;
+    if (opts.verbose) process.stderr.write(dim(`Status from cc-dashboard (pid ${info.pid}).\n`));
+    return {
+      status: Object.fromEntries(mods.map(m => [m, byName.get(m).cells])),
+      warnings: snapshot.warnings,
+      skipped: snapshot.skipped,
+    };
   } catch (e) {
-    fail(e.message);
+    if (process.stderr.isTTY) process.stderr.write('\r\x1b[K');
+    process.stderr.write(dim(`Couldn't use cc-dashboard (${e.message}), so checking here.\n`));
+    return null;
   }
-  if (opts.list === 'versions') {
-    config.versions.forEach(v => console.log(v.name));
-    return;
-  }
-  const found = discoverMods(config);
-  if (opts.list === 'mods') {
-    found.mods.forEach(m => console.log(m));
-    return;
-  }
+}
 
-  for (const w of checkVersionDirs(config)) process.stderr.write(`${yellow('Warning:')} ${w}\n`);
-  for (const s of found.skipped) {
-    process.stderr.write(dim(`Skipped ${s.version}/${s.name}: ${s.origin ? `it is a checkout of ${s.origin}` : 'it has no origin remote'}.\n`));
-  }
-  let mods = found.mods;
-  if (opts.mods.length) {
-    mods = [...new Set(opts.mods.map(arg => {
-      const match = found.mods.find(m => m.toLowerCase() === arg.toLowerCase());
-      if (!match) fail(`Unknown mod ${arg}. Known mods: ${found.mods.join(', ')}`);
-      return match;
-    }))];
-  }
-  if (!mods.length) fail(`No mod checkouts found in the version dirs of ${config.file}`);
-
+async function compute(config, found, mods, opts) {
   const selected = { mods, byVersion: found.byVersion };
   let fetch = opts.fetch;
   if (opts.fetch && !opts.fetchAll && config.github !== false) {
@@ -218,6 +201,43 @@ async function main() {
     onProgress: progress,
   });
   if (progress) process.stderr.write('\r\x1b[K');
+  return { status, warnings: checkVersionDirs(config), skipped: found.skipped };
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    fail(e.message);
+  }
+  if (opts.list === 'versions') {
+    config.versions.forEach(v => console.log(v.name));
+    return;
+  }
+  const found = discoverMods(config);
+  if (opts.list === 'mods') {
+    found.mods.forEach(m => console.log(m));
+    return;
+  }
+
+  let mods = found.mods;
+  if (opts.mods.length) {
+    mods = [...new Set(opts.mods.map(arg => {
+      const match = found.mods.find(m => m.toLowerCase() === arg.toLowerCase());
+      if (!match) fail(`Unknown mod ${arg}. Known mods: ${found.mods.join(', ')}`);
+      return match;
+    }))];
+  }
+  if (!mods.length) fail(`No mod checkouts found in the version dirs of ${config.file}`);
+
+  const { status, warnings, skipped } = (opts.dashboard && await fromDashboard(config, mods, opts))
+    || await compute(config, found, mods, opts);
+  for (const w of warnings) process.stderr.write(`${yellow('Warning:')} ${w}\n`);
+  for (const s of skipped) {
+    process.stderr.write(dim(`Skipped ${s.version}/${s.name}: ${s.origin ? `it is a checkout of ${s.origin}` : 'it has no origin remote'}.\n`));
+  }
 
   printTable(config, mods, status);
   printTodo(config, mods, status);

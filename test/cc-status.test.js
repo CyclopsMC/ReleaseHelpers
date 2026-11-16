@@ -46,7 +46,14 @@ function checkout(versionDir, mod, branch) {
 }
 
 function runEnv(extraEnv) {
-  return { ...env, NO_COLOR: '1', CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'), CC_HELPERS_MARKS: path.join(tmp, 'marks.json'), ...extraEnv };
+  return {
+    ...env,
+    NO_COLOR: '1',
+    CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'),
+    CC_HELPERS_MARKS: path.join(tmp, 'marks.json'),
+    CC_HELPERS_STATE_DIR: path.join(tmp, 'state'),
+    ...extraEnv,
+  };
 }
 
 function run(args, extraEnv = {}, { bin = BIN, cwd = tmp } = {}) {
