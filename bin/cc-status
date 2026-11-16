@@ -3,7 +3,7 @@
 // Shows which mods need a release (or upmerge) on which maintained MC versions.
 
 const { loadConfig } = require('./lib/config');
-const { discoverMods, checkVersionDirs, computeStatus, chainStart, cellUserFacing, isUpmergeOnly } = require('./lib/status');
+const { discoverMods, checkVersionDirs, computeStatus, planFetches, chainStart, cellUserFacing, isUpmergeOnly } = require('./lib/status');
 
 const HELP = `Usage: cc-status [options] [mod...]
 
@@ -13,6 +13,7 @@ Mods are the git checkouts found in the version dirs of ~/.config/cc-helpers.jso
 Options:
   -v, --verbose     List the commits behind each cell, and the ones the filter dropped
   --no-fetch        Don't fetch; use the current remote-tracking branches
+  --fetch-all       Fetch every checkout, instead of only those GitHub reports changes for
   -j, --jobs <n>    Number of repos to process in parallel (default 8)
   --list-mods       Print the mod names (used by shell completion)
   --list-versions   Print the version names (used by shell completion)
@@ -20,11 +21,12 @@ Options:
 `;
 
 function parseArgs(argv) {
-  const opts = { verbose: false, fetch: true, jobs: null, mods: [], list: null };
+  const opts = { verbose: false, fetch: true, fetchAll: false, jobs: null, mods: [], list: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-v' || a === '--verbose') opts.verbose = true;
     else if (a === '--no-fetch') opts.fetch = false;
+    else if (a === '--fetch-all') opts.fetchAll = true;
     else if (a === '-j' || a === '--jobs') {
       const n = Number(argv[++i]);
       if (!Number.isInteger(n) || n < 1) fail(`${a} needs a positive number`);
@@ -121,7 +123,8 @@ function printCommits(title, commits, withReason) {
   if (!commits.length) return;
   console.log(`    ${title}:`);
   for (const c of commits) {
-    console.log(`      ${dim(c.hash.slice(0, 9))} ${c.subject}${withReason ? dim(` (${c.reason})`) : ''}`);
+    const note = withReason ? c.reason : (c.marked ? 'marked as release' : null);
+    console.log(`      ${dim(c.hash.slice(0, 9))} ${c.subject}${note ? dim(` (${note})`) : ''}`);
   }
 }
 
@@ -192,11 +195,25 @@ async function main() {
   }
   if (!mods.length) fail(`No mod checkouts found in the version dirs of ${config.file}`);
 
+  const selected = { mods, byVersion: found.byVersion };
+  let fetch = opts.fetch;
+  if (opts.fetch && !opts.fetchAll && config.github !== false) {
+    if (process.stderr.isTTY) process.stderr.write('Asking GitHub what changed...');
+    const plan = await planFetches(config, selected);
+    if (process.stderr.isTTY) process.stderr.write('\r\x1b[K');
+    if (plan && plan.error) {
+      process.stderr.write(dim(`Couldn't ask GitHub what changed (${plan.error}), so fetching every checkout.\n`));
+    } else if (plan) {
+      fetch = dir => plan.toFetch.has(dir);
+      if (opts.verbose) process.stderr.write(dim(`Fetching ${plan.toFetch.size} of ${plan.total} checkouts; GitHub has nothing new for the others.\n`));
+    }
+  }
+
   const progress = process.stderr.isTTY
     ? (done, total) => process.stderr.write(`\r${opts.fetch ? 'Fetching and checking' : 'Checking'} ${done}/${total}...`)
     : null;
-  const status = await computeStatus(config, { mods, byVersion: found.byVersion }, {
-    fetch: opts.fetch,
+  const status = await computeStatus(config, selected, {
+    fetch,
     jobs: opts.jobs || config.jobs || 8,
     onProgress: progress,
   });
