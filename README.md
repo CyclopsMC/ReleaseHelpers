@@ -67,21 +67,7 @@ To do, by lowest MC version:
 
 The "To do" list groups mods by the lowest MC version that needs work, which is where a release chain for that mod starts.
 
-Only commits that matter to players are counted:
-- `Bump mod version` commits are ignored.
-- `Bump compat version` commits count only if their message lists changelog entries.
-- Commits that only touch dev files (CI, tests, game tests, Gradle files, `*.md`, changelogs, ...) are ignored.
-- Translation commits count, but are marked with `t`.
-
 Options:
 - `cc-status IntegratedDynamics EvilCraft`: only these mods.
 - `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
 - `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
-
-`cc-status` only fetches `origin`; it never changes working trees or local branches.
-
-## Tests
-
-```bash
-node --test test/*.test.js
-```
