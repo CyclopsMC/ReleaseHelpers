@@ -54,11 +54,11 @@ function defaultSource(cwd) {
   }
 }
 
-function devOnlyPaths() {
+function commitFilter() {
   try {
-    return loadConfig().devOnlyPaths;
+    return loadConfig().commitFilter;
   } catch (e) {
-    return [];
+    return {};
   }
 }
 
@@ -84,7 +84,7 @@ async function main() {
   if (cyclops) header.push(`Requires CyclopsCore version ${cyclops} or higher.`);
 
   process.stdout.write(await draftChangelog({
-    cwd, mc, since, srcBranch: source, branch, header, devOnlyPaths: devOnlyPaths(), comments: opts.comments,
+    cwd, mc, since, srcBranch: source, branch, header, filter: commitFilter(), comments: opts.comments,
   }));
 }
 

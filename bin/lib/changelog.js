@@ -141,7 +141,8 @@ async function mergedBeforeSince(cwd, tag, srcTags, since) {
 // Drafts the changelog of the next release: commits since `since` up to `head`.
 // Commits upmerged from `srcBranch` reuse the entries of the source release that contains them,
 // so manual edits made there carry over. Entries already released on this MC version are left out.
-async function draftChangelog({ cwd, mc, since, head = 'HEAD', srcBranch = null, branch = 'this branch', header = [], devOnlyPaths = [], comments = true }) {
+// `filter` is the commit filter from the config (devOnlyPaths, ignoreCommits).
+async function draftChangelog({ cwd, mc, since, head = 'HEAD', srcBranch = null, branch = 'this branch', header = [], filter = {}, comments = true }) {
   const commits = await listCommits(cwd, [`refs/tags/${since}..${head}`]);
   const srcRef = srcBranch ? `refs/remotes/origin/${srcBranch}` : null;
   const notes = [];
@@ -193,7 +194,7 @@ async function draftChangelog({ cwd, mc, since, head = 'HEAD', srcBranch = null,
   const dropped = [];
   for (const c of commits) {
     if (fromSrc.get(c.hash)) continue;
-    const r = classify(c, devOnlyPaths);
+    const r = classify(c, filter);
     if (!r.userFacing) {
       dropped.push({ commit: c, reason: r.reason });
       continue;
