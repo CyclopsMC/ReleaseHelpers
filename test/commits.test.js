@@ -31,6 +31,8 @@ test('commits touching only dev files are dropped', () => {
     ['src/main/java/org/cyclops/mod/gametest/GameTestsFoo.java'],
     ['loader-neoforge/build.gradle', 'gradle/wrapper/gradle-wrapper.properties', 'gradlew'],
     ['CLAUDE.md'],
+    ['buildSrc/src/main/groovy/multiloader-common.gradle', 'loader-neoforge/build.gradle'],
+    ['build.gradle', 'buildSrc/src/main/groovy/multiloader-common.gradle', 'gradle.properties'],
   ]) {
     assert.deepStrictEqual(classify(c('Some change', files)), { userFacing: false, reason: 'only dev files' }, files.join(','));
   }

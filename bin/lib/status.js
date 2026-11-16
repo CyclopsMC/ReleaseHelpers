@@ -65,26 +65,36 @@ function checkVersionDirs(config) {
   return warnings;
 }
 
+const CLOBBERED_TAG = /^! \[rejected\]\s+(\S+)\s+->\s+\S+\s+\(would clobber existing tag\)$/;
+
+// Fetches the refspecs and tags. Returns the local tags that differ from origin: git refuses to
+// overwrite those (e.g. after a tag was recreated on GitHub), but still updates the branches.
 async function fetchRefspecs(repoDir, refspecs) {
-  const args = ['fetch', '--quiet', '--tags', 'origin', ...refspecs];
-  try {
-    await git(repoDir, args, { timeout: FETCH_TIMEOUT_MS });
-  } catch (e) {
-    // Another process (IDE, other chain) may hold a ref lock briefly.
-    if (!/lock/i.test(e.message)) throw e;
-    await new Promise(r => setTimeout(r, 1000));
-    await git(repoDir, args, { timeout: FETCH_TIMEOUT_MS });
+  const args = ['fetch', '--tags', 'origin', ...refspecs];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await git(repoDir, args, { timeout: FETCH_TIMEOUT_MS });
+      return [];
+    } catch (e) {
+      const problems = e.stderr ? e.stderr.split('\n').map(l => l.trim()).filter(l => /^(fatal|error|!)/.test(l)) : [];
+      const clobbered = problems.map(l => CLOBBERED_TAG.exec(l)).filter(Boolean).map(m => m[1]);
+      if (problems.length && clobbered.length === problems.length) return clobbered;
+      // Another process (IDE, other chain) may hold a ref lock briefly.
+      if (attempt > 0 || !/lock/i.test(e.message)) throw e;
+      await new Promise(r => setTimeout(r, 1000));
+    }
   }
 }
 
 // Fetches the branch and the lower branches; lower ones may not exist remotely.
+// Returns the local tags that differ from origin.
 async function fetchBranches(repoDir, branch, lowerBranches) {
   const spec = b => `+refs/heads/${b}:refs/remotes/origin/${b}`;
   try {
-    await fetchRefspecs(repoDir, [branch, ...lowerBranches].map(spec));
+    return await fetchRefspecs(repoDir, [branch, ...lowerBranches].map(spec));
   } catch (e) {
     if (lowerBranches.length === 0) throw e;
-    await fetchRefspecs(repoDir, [spec(branch)]);
+    const clobbered = await fetchRefspecs(repoDir, [spec(branch)]);
     for (const b of lowerBranches) {
       try {
         await fetchRefspecs(repoDir, [spec(b)]);
@@ -92,7 +102,14 @@ async function fetchBranches(repoDir, branch, lowerBranches) {
         // Not on the remote.
       }
     }
+    return clobbered;
   }
+}
+
+function describeClobbered(tags) {
+  const names = tags.slice(0, 3).join(', ') + (tags.length > 3 ? `, and ${tags.length - 3} more` : '');
+  return `${tags.length === 1 ? 'tag' : 'tags'} ${names} ${tags.length === 1 ? 'differs' : 'differ'} from origin `
+    + '(to use the ones from origin: git fetch --tags --force origin)';
 }
 
 async function refExists(repoDir, ref) {
@@ -117,7 +134,7 @@ async function localIssues(repoDir, branch, remoteRef) {
 //   unreleased:  commits since lastRelease (null if no release yet)
 //   pending:     commits on lower maintained branches that this branch lacks
 async function cellStatus({ repoDir, version, lowerBranches, fetch, devOnlyPaths }) {
-  if (fetch) await fetchBranches(repoDir, version.branch, lowerBranches);
+  const clobbered = fetch ? await fetchBranches(repoDir, version.branch, lowerBranches) : [];
   const ref = `refs/remotes/origin/${version.branch}`;
   if (!(await refExists(repoDir, ref))) throw new Error(`origin/${version.branch} not found`);
   const props = await readPropsAt(repoDir, ref);
@@ -140,6 +157,7 @@ async function cellStatus({ repoDir, version, lowerBranches, fetch, devOnlyPaths
     ? partition(await listCommits(repoDir, [...lowerRefs, `^${ref}`]), devOnlyPaths)
     : partition([], devOnlyPaths);
   const local = await localIssues(repoDir, version.branch, ref);
+  if (clobbered.length) local.push(describeClobbered(clobbered));
   return { mc, modVersion, lastRelease, unreleased, pending, local };
 }
 
@@ -172,9 +190,15 @@ async function computeStatus(config, { mods, byVersion }, { fetch = true, jobs =
   return status;
 }
 
+// Mods without a release on any of their versions (like the compat mods) are only upmerged.
+function isUpmergeOnly(cells) {
+  const present = cells.filter(c => !c.missing);
+  return present.length > 0 && present.every(c => !c.error && !c.lastRelease);
+}
+
 // Index of the lowest version a release chain for this mod should start at, or -1.
 function chainStart(cells) {
   return cells.findIndex(c => cellUserFacing(c).length > 0);
 }
 
-module.exports = { discoverMods, checkVersionDirs, computeStatus, cellStatus, chainStart, cellUserFacing };
+module.exports = { discoverMods, checkVersionDirs, computeStatus, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, fetchBranches };

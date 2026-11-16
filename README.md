@@ -64,21 +64,14 @@ To do, by lowest MC version:
 - `new`: no release on this MC version yet.
 - `!`: the local checkout needs attention: wrong branch, uncommitted changes, unpushed commits or a merge in progress.
 - `-`: no checkout for this version. `?`: error, see the bottom of the output.
+- Mods without any release on any version (like the compat mods) are only upmerged: their cells only show `↑N`, and they are listed under "Upmerge only".
 
 The "To do" list groups mods by the lowest MC version that needs work, which is where a release chain for that mod starts.
-
-Only commits that matter to players are counted:
-- `Bump mod version` commits are ignored.
-- `Bump compat version` commits count only if their message lists changelog entries.
-- Commits that only touch dev files (CI, tests, game tests, Gradle files, `*.md`, changelogs, ...) are ignored.
-- Translation commits count, but are marked with `t`.
 
 Options:
 - `cc-status IntegratedDynamics EvilCraft`: only these mods.
 - `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
 - `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
-
-`cc-status` only fetches `origin`; it never changes working trees or local branches.
 
 ## Changelog drafts
 
@@ -115,10 +108,3 @@ Fixes:
 
 `cc-changelog-confirm` (run by `cc-release`) now first runs `cc-changelog-finalize`, which removes the `#` lines and empty sections, and stops the release if the changelog still has a `TODO` marker, a `Bump ... version` entry, merge conflict markers, or no entries.
 
-## Tests
-
-```bash
-node --test test/*.test.js
-```
-
-On macOS, the tests need GNU sed as `gsed` (`brew install gnu-sed`), like `cc-bump`.
