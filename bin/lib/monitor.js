@@ -10,6 +10,7 @@ const { loadConfig, configPath } = require('./config');
 const { marksPath } = require('./marks');
 const { modLockOwner } = require('./lock');
 const { githubRepo } = require('./github');
+const { readChains, chainsDir } = require('./progress');
 const {
   discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, isUpmergeOnly, modWork, cellText, originUrl,
 } = require('./status');
@@ -78,6 +79,9 @@ class Monitor extends EventEmitter {
     this.pending = [];
     this.busy = null;
     this.info = { lastLocal: null, lastGitHubCheck: null, lastFetchAll: null, github: null, fetched: null };
+    // mod -> { heads: Map branch -> CI state, releases: Map tag -> CI state }, from the GitHub check.
+    this.health = new Map();
+    this.chains = {};
   }
 
   opt(name) {
@@ -95,7 +99,10 @@ class Monitor extends EventEmitter {
       t.unref();
       this.timers.push(t);
     };
-    every(this.opt('localInterval'), () => this.request('local'));
+    every(this.opt('localInterval'), () => {
+      this.readChains();
+      this.request('local');
+    });
     every(this.opt('remoteInterval'), () => this.request('remote'));
   }
 
@@ -162,36 +169,48 @@ class Monitor extends EventEmitter {
   }
 
   // Fetches what changed on origin and recomputes those mods; returns the mods it recomputed.
+  // With GitHub, it also updates the CI states.
   async remote(fetchAll) {
     const now = () => new Date().toISOString();
     const age = t => (t ? (Date.now() - Date.parse(t)) / 1000 : Infinity);
     // A running release chain fetches by itself; fetching at the same time could make it fail.
     const canFetch = dir => !modLockOwner(path.basename(dir));
-    const useGitHub = this.config && this.config.github !== false && this.info.github !== 'no token';
-    const due = age(this.info.lastFetchAll) >= this.opt(useGitHub ? 'fetchAllInterval' : 'fetchAllWithoutGitHub');
-    if (!fetchAll && !due && useGitHub) {
-      const plan = await planFetches(this.config, this.found);
+    let plan = null;
+    if (this.config && this.config.github !== false && this.info.github !== 'no token') {
+      plan = await planFetches(this.config, this.found, { health: true, releases: this.releaseTags() });
       this.info.lastGitHubCheck = now();
       this.info.github = plan ? (plan.error ? `error: ${plan.error}` : 'ok') : 'no token';
+      if (plan && plan.error) this.log(`Couldn't ask GitHub what changed: ${plan.error}`);
       if (plan && !plan.error) {
-        const dirs = [...plan.toFetch].filter(canFetch);
-        const mods = [...new Set(dirs.map(d => path.basename(d)))];
-        await this.compute(mods, dir => plan.toFetch.has(dir) && canFetch(dir));
-        this.info.fetched = { count: dirs.length, total: plan.total, at: now() };
-        if (dirs.length) this.log(`Fetched ${dirs.length} of ${plan.total} checkouts (${mods.join(', ')})`);
-        return new Set(mods);
+        for (const [mod, refs] of plan.refsByMod) this.health.set(mod, { heads: refs.headStates, releases: refs.releaseStates });
       }
-      if (plan) this.log(`Couldn't ask GitHub what changed: ${plan.error}`);
-      if (!plan || !this.info.lastFetchAll) return this.remote(true);
-      return new Set();
     }
-    if (!fetchAll && !due) return new Set();
+    const planned = plan && !plan.error;
+    const due = age(this.info.lastFetchAll) >= this.opt(planned ? 'fetchAllInterval' : 'fetchAllWithoutGitHub');
+    if (!fetchAll && !due) {
+      if (!planned) return new Set();
+      const dirs = [...plan.toFetch].filter(canFetch);
+      const mods = [...new Set(dirs.map(d => path.basename(d)))];
+      await this.compute(mods, dir => plan.toFetch.has(dir) && canFetch(dir));
+      this.info.fetched = { count: dirs.length, total: plan.total, at: now() };
+      if (dirs.length) this.log(`Fetched ${dirs.length} of ${plan.total} checkouts (${mods.join(', ')})`);
+      return new Set(mods);
+    }
     await this.compute(this.found.mods, canFetch);
     const total = checkouts(this.config, this.found).length;
     this.info.lastFetchAll = now();
     this.info.fetched = { count: total, total, at: this.info.lastFetchAll };
     this.log(`Fetched all ${total} checkouts`);
     return new Set(this.found.mods);
+  }
+
+  // The last release tag of each mod per version, to ask GitHub for their CI state.
+  releaseTags() {
+    const tags = {};
+    for (const [mod, cells] of Object.entries(this.status)) {
+      tags[mod] = [...new Set(cells.map(c => c.lastRelease).filter(Boolean))];
+    }
+    return tags;
   }
 
   syncWatchers() {
@@ -253,6 +272,20 @@ class Monitor extends EventEmitter {
         this.request('local');
       }, 300);
     };
+    // Running release chains write their progress here.
+    try {
+      fs.mkdirSync(chainsDir(), { recursive: true });
+      let chainTimer;
+      const w = fs.watch(chainsDir(), () => {
+        clearTimeout(chainTimer);
+        chainTimer = setTimeout(() => this.readChains(), 100);
+      });
+      w.on('error', () => {});
+      this.fileWatchers.push(w);
+    } catch (e) {
+      this.log(`Can't watch ${chainsDir()}: ${e.message}`);
+    }
+    this.readChains();
     for (const file of [configPath(), marksPath()]) {
       const dir = path.dirname(file);
       try {
@@ -266,6 +299,11 @@ class Monitor extends EventEmitter {
         this.log(`Can't watch ${file}: ${e.message}`);
       }
     }
+  }
+
+  readChains() {
+    this.chains = readChains();
+    this.changed();
   }
 
   changed() {
@@ -290,13 +328,34 @@ class Monitor extends EventEmitter {
   snapshot() {
     const config = this.config;
     const versions = config ? config.versions.map(v => ({ name: v.name, branch: v.branch })) : [];
-    const mods = this.found.mods.map(name => {
+    let mods = this.found.mods.map(name => {
       const cells = this.status[name];
-      const base = { name, github: this.githubOf(name) };
-      if (!cells) return { ...base, loading: true, start: -1, group: null, cells: versions.map(() => ({ loading: true })) };
+      const base = { name, github: this.githubOf(name), chains: this.chains[name] || [] };
+      if (!cells) return { ...base, loading: true, start: -1, group: null, deps: [], cells: versions.map(() => ({ loading: true })) };
       const upmergeOnly = isUpmergeOnly(cells);
-      return { ...base, upmergeOnly, ...modWork(cells), cells: cells.map(c => cellJson(c, upmergeOnly)) };
+      const health = this.health.get(name);
+      return {
+        ...base,
+        upmergeOnly,
+        ...modWork(cells),
+        deps: this.depsOf(name, cells),
+        cells: cells.map((c, i) => {
+          const json = cellJson(c, upmergeOnly);
+          if (health && !c.missing && !c.error) {
+            json.ci = health.heads ? health.heads.get(versions[i].branch) || null : null;
+            json.releaseCi = health.releases && c.lastRelease ? health.releases.get(c.lastRelease) || null : null;
+          }
+          return json;
+        }),
+      };
     });
+    mods = orderByDependencies(mods);
+    const byName = new Map(mods.map(m => [m.name, m]));
+    for (const m of mods) {
+      // Dependencies to release first: with changes to release, or a release chain running.
+      m.blockedBy = m.deps.filter(d => byName.get(d).group === 'todo' || byName.get(d).chains.some(ch => !ch.rehearsal));
+    }
+    const dashboard = (config && config.dashboard) || {};
     return {
       configFile: config ? config.file : configPath(),
       versions,
@@ -304,8 +363,32 @@ class Monitor extends EventEmitter {
       skipped: this.found.skipped,
       warnings: (this.configError ? [this.configError] : []).concat(config ? checkVersionDirs(config) : []),
       refresh: { running: this.busy, ...this.info },
+      features: { terminal: !!dashboard.terminal || process.platform === 'darwin', ide: Array.isArray(dashboard.ide) },
     };
   }
+
+  // Other mods this one depends on (by <mod>_version properties), by name.
+  depsOf(name, cells) {
+    const keys = new Set(cells.flatMap(c => c.depKeys || []));
+    return this.found.mods.filter(m => m !== name && keys.has(m.toLowerCase()));
+  }
+}
+
+// Dependencies first; mods at the same depth by name.
+function orderByDependencies(mods) {
+  const byName = new Map(mods.map(m => [m.name, m]));
+  const depth = new Map();
+  const visit = (name, seen) => {
+    if (depth.has(name)) return depth.get(name);
+    if (seen.has(name)) return 0;
+    seen.add(name);
+    const deps = byName.get(name).deps.filter(d => byName.has(d));
+    const d = deps.length ? 1 + Math.max(...deps.map(x => visit(x, seen))) : 0;
+    depth.set(name, d);
+    return d;
+  };
+  mods.forEach(m => visit(m.name, new Set()));
+  return mods.slice().sort((a, b) => depth.get(a.name) - depth.get(b.name) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 }
 
 module.exports = { Monitor, DEFAULTS };

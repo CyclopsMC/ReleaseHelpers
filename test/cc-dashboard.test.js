@@ -72,9 +72,21 @@ before(async () => {
   sb.git(w, 'push', '-q', '--tags', 'origin', 'master-1.20-lts', 'master-1.21-lts');
   const b = sb.newMod('ModB');
   sb.git(b, 'checkout', '-q', '-b', 'master-1.21-lts');
-  sb.commit(b, 'Initial', { 'gradle.properties': props('1.21.1', '1.0.0'), 'src/main/java/B.java': 'b' });
+  // ModB depends on ModA, and Addon on ModB.
+  sb.commit(b, 'Initial', { 'gradle.properties': `${props('1.21.1', '1.0.0')}moda_version=1.0.0\n`, 'src/main/java/B.java': 'b' });
   sb.git(b, 'tag', '1.21.1-1.0.0');
   sb.git(b, 'push', '-q', '--tags', 'origin', 'master-1.21-lts');
+  const addon = sb.newMod('Addon');
+  sb.git(addon, 'checkout', '-q', '-b', 'master-1.21-lts');
+  sb.commit(addon, 'Initial', { 'gradle.properties': `${props('1.21.1', '1.0.0')}modb_version=1.0.0\n`, 'src/main/java/C.java': 'c' });
+  sb.git(addon, 'tag', '1.21.1-1.0.0');
+  sb.git(addon, 'push', '-q', '--tags', 'origin', 'master-1.21-lts');
+  sb.checkout('mc21-lts', 'Addon', 'master-1.21-lts');
+  // Stand-ins for a terminal and an IDE, which log what they were asked to open.
+  for (const tool of ['fake-terminal', 'fake-ide']) {
+    sb.write(sb.path('shims', tool), `#!/bin/sh\necho "$@" >> '${sb.path(`${tool}.log`)}'\n`);
+    fs.chmodSync(sb.path('shims', tool), 0o755);
+  }
   sb.checkout('mc20-lts', 'ModA', 'master-1.20-lts');
   sb.checkout('mc21-lts', 'ModA', 'master-1.21-lts');
   sb.checkout('mc21-lts', 'ModB', 'master-1.21-lts');
@@ -86,7 +98,12 @@ before(async () => {
       { dir: sb.path('mc21-lts'), branch: 'master-1.21-lts' },
     ],
     github: false,
-    dashboard: { localInterval: 3600, remoteInterval: 3600 },
+    dashboard: {
+      localInterval: 3600,
+      remoteInterval: 3600,
+      terminal: [sb.path('shims', 'fake-terminal'), '{cmd}'],
+      ide: [sb.path('shims', 'fake-ide'), '{dir}'],
+    },
   }));
 
   daemon = startDaemon();
@@ -110,6 +127,17 @@ test('serves the page and the status of every mod', async () => {
   assert.strictEqual(modA.group, 'todo');
   assert.strictEqual(modA.start, 0);
   assert.strictEqual(modA.cells[0].unreleased.userFacing[0].subject, 'Fix crash');
+});
+
+test('orders mods by their dependencies, and says what they wait for', async () => {
+  const s = await waitForTexts('ModA', ['1', '↑1']);
+  assert.deepStrictEqual(s.mods.map(m => m.name), ['ModA', 'ModB', 'Addon']);
+  const byName = new Map(s.mods.map(m => [m.name, m]));
+  assert.deepStrictEqual(byName.get('ModB').deps, ['ModA']);
+  // ModA has changes to release; ModB doesn't.
+  assert.deepStrictEqual(byName.get('ModB').blockedBy, ['ModA']);
+  assert.deepStrictEqual(byName.get('Addon').blockedBy, []);
+  assert.deepStrictEqual(s.features, { terminal: true, ide: true });
 });
 
 test('only answers as localhost, and changes need the token', async () => {
@@ -176,6 +204,55 @@ test('picks up marks made with cc-mark', async () => {
   assert.strictEqual(sb.run(path.join(BIN, 'cc-mark'), ['no-release', hash], { cwd: modA }).code, 0);
   const s = await waitForTexts('ModA', ['1', '↑1']);
   assert.match(JSON.stringify(s.mods.find(m => m.name === 'ModA').cells[0].unreleased.dropped), /marked as no release/);
+});
+
+test('marks commits from the page', async () => {
+  const hash = sb.git(sb.path('mc20-lts', 'ModA'), 'log', '-1', '--format=%H', '--grep=^Fix crash').trim();
+  let r = await post('/api/mark', { mod: 'ModA', hash: hash.slice(0, 9), release: false });
+  assert.strictEqual(r.status, 200, r.body);
+  assert.deepStrictEqual(texts(await state(), 'ModA'), ['.', '.']);
+  const marks = JSON.parse(sb.read(sb.path('marks.json')));
+  assert.strictEqual(marks.commits[hash].release, false);
+  assert.strictEqual(marks.commits[hash].reason, 'marked in cc-dashboard');
+  r = await post('/api/mark', { mod: 'ModA', hash, release: null });
+  assert.strictEqual(r.status, 200, r.body);
+  assert.deepStrictEqual(texts(await state(), 'ModA'), ['1', '↑1']);
+  assert.strictEqual((await post('/api/mark', { mod: 'Nope', hash, release: false })).status, 400);
+  assert.strictEqual((await post('/api/mark', { mod: 'ModA', hash: 'abc', release: false })).status, 400);
+});
+
+test('starts release chains and tools in a terminal', async () => {
+  const dir20 = sb.path('mc20-lts', 'ModA');
+  const chainBin = path.join(BIN, 'cc-release-chain');
+  assert.strictEqual((await post('/api/chain', { mod: 'ModA' })).status, 200);
+  assert.strictEqual((await post('/api/chain', { mod: 'ModA', rehearse: true, confirm: true })).status, 200);
+  assert.strictEqual((await post('/api/terminal', { mod: 'ModA', version: '1.21-lts' })).status, 200);
+  assert.strictEqual((await post('/api/ide', { mod: 'ModB', version: '1.21-lts' })).status, 200);
+  assert.strictEqual((await post('/api/terminal', { mod: 'ModB', version: '1.20-lts' })).status, 400);
+  // The chain starts in the checkout of its first version.
+  assert.deepStrictEqual(sb.read(sb.path('fake-terminal.log')).trim().split('\n'), [
+    `cd '${dir20}' && '${chainBin}' 'ModA'`,
+    `cd '${dir20}' && '${chainBin}' --rehearse --confirm 'ModA'`,
+    `cd '${sb.path('mc21-lts', 'ModA')}'`,
+  ]);
+  assert.strictEqual(sb.read(sb.path('fake-ide.log')).trim(), sb.path('mc21-lts', 'ModB'));
+});
+
+test('shows a running release chain and what it waits for', async () => {
+  const chain = spawn(process.execPath, [path.join(BIN, 'cc-release-chain'), 'ModA', '--no-build', '--no-review'], { env: sb.env });
+  let out = '';
+  chain.stdout.on('data', d => { out += d; });
+  const s = await waitFor(async () => {
+    const m = (await state()).mods.find(x => x.name === 'ModA');
+    return m.chains.length && m.chains[0].waiting && m;
+  }, `the chain to wait for an answer\n${out}`);
+  assert.strictEqual(s.chains[0].pid, chain.pid);
+  assert.match(s.chains[0].waiting, /^Start\?/);
+  assert.deepStrictEqual(s.chains[0].versions, ['1.20-lts', '1.21-lts']);
+  const exited = new Promise(resolve => chain.on('exit', resolve));
+  chain.stdin.end('n\n');
+  await exited;
+  await waitFor(async () => (await state()).mods.find(x => x.name === 'ModA').chains.length === 0, 'the chain to be gone');
 });
 
 test('cc-status shows the status of the running dashboard', () => {

@@ -154,8 +154,10 @@ function createDashboardServer(monitor, { token, log = () => {}, actions = {} })
       if (body.wait) await done;
       return send(res, body.wait ? 200 : 202, { ok: true });
     }
-    const action = req.method === 'POST' && url.pathname.startsWith('/api/') && actions[url.pathname.slice(5)];
-    if (action) return send(res, 200, await action(await readBody(req)));
+    const name = url.pathname.slice('/api/'.length);
+    if (req.method === 'POST' && url.pathname.startsWith('/api/') && Object.prototype.hasOwnProperty.call(actions, name)) {
+      return send(res, 200, await actions[name](await readBody(req)));
+    }
     return send(res, 404, { error: 'Not found' });
   }
 

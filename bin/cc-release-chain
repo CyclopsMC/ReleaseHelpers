@@ -14,6 +14,7 @@ const { readWorkingProps, readPropsAt, cyclopsVersion } = require('./lib/props')
 const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/changelog');
 const { runBuild, buildEnv, buildEnabled, buildCommand } = require('./lib/build');
 const { tryLock, modLockDir, modLockOwner, acquireBuildSlot } = require('./lib/lock');
+const { ChainProgress } = require('./lib/progress');
 const { Prompter, colors: c } = require('./lib/ui');
 const { createRehearsal, rehearsalResults } = require('./lib/rehearsal');
 
@@ -124,6 +125,21 @@ const isDirty = async repo => (await git(repo, ['status', '--porcelain', '--untr
 const tagExists = async (repo, tag) => (await gitOrNull(repo, ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) !== null;
 const count = async (repo, range) => Number((await git(repo, ['rev-list', '--count', ...range])).trim());
 
+// For cc-dashboard: what the chain does, and whether it waits for you.
+const NO_PROGRESS = { step() {}, waiting() {} };
+const step = (ctx, what) => (ctx.progress || NO_PROGRESS).step(ctx.version.name, what);
+
+// Runs an interactive child process, like Claude or your editor, while the chain waits for you.
+function runWaiting(ctx, what, cmd, args, options) {
+  const progress = ctx.progress || NO_PROGRESS;
+  progress.waiting(what);
+  try {
+    return run(cmd, args, options);
+  } finally {
+    progress.waiting(null);
+  }
+}
+
 function heading(text) {
   console.log(`\n${c.bold(c.cyan(`== ${text} ==`))}`);
 }
@@ -132,6 +148,7 @@ function heading(text) {
 
 async function sync(ctx) {
   const { repo, version, ui } = ctx;
+  step(ctx, 'syncing');
   const branch = await gitOrNull(repo, ['symbolic-ref', '-q', '--short', 'HEAD']);
   if (branch !== version.branch) throw new Abort(`${repo} is on ${branch || 'a detached HEAD'}, expected ${version.branch}`);
   // New tags come along with the branch. Tags that differ from origin were reported before starting.
@@ -160,7 +177,7 @@ async function resolveConflicts(ctx) {
     if (runClaude) {
       const cmd = (config.claude && config.claude.upmerge) || DEFAULT_UPMERGE_COMMAND;
       console.log(c.yellow(`The upmerge has conflicts. Starting ${cmd.join(' ')}; exit Claude when it's done.`));
-      run(cmd[0], cmd.slice(1), { cwd: repo, env: buildEnv(ctx.version) });
+      runWaiting(ctx, 'Claude, for the merge conflicts', cmd[0], cmd.slice(1), { cwd: repo, env: buildEnv(ctx.version) });
     }
     const conflicts = await hasConflicts(repo);
     if (!conflicts && !(await isMerging(repo))) return;
@@ -182,6 +199,7 @@ async function resolveConflicts(ctx) {
 async function upmerge(ctx) {
   const { repo, version, lower, state } = ctx;
   if (!lower) return 'none';
+  step(ctx, 'upmerging');
   if (await isMerging(repo)) {
     await resolveConflicts(ctx);
     state.upmerge = 'conflict';
@@ -240,6 +258,7 @@ async function buildUntilOk(ctx) {
   const { repo, version, ui, config, state, result } = ctx;
   const log = path.join(ctx.stateDir, 'build.log');
   for (;;) {
+    step(ctx, 'building');
     console.log(`Building: ${buildCommand(config).join(' ')} ${c.dim(`(log: ${log})`)}`);
     const { code, ms } = await runBuild({ config, version, cwd: repo, logFile: log });
     if (code === 0) {
@@ -269,7 +288,7 @@ async function buildUntilOk(ctx) {
       const prompt = `The build (${buildCommand(config).join(' ')}) fails on ${version.branch}`
         + `${ctx.lower ? ` after upmerging origin/${ctx.src}` : ''}. The full build log is at ${log}. `
         + "Fix it, but don't git commit. GRADLE_OPTS is already set for this Minecraft version, so don't change gradle.properties or ~/.gradle/gradle.properties.";
-      run(cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
+      runWaiting(ctx, 'Claude, to fix the build', cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
       if (await isDirty(repo)) await commitChanges(ctx, 'Claude', 'Fix build');
     }
   }
@@ -284,6 +303,7 @@ async function review(ctx) {
     + 'GRADLE_OPTS is already set for this Minecraft version, so run Gradle as usual and '
     + "don't change gradle.properties or ~/.gradle/gradle.properties. End with a one-line verdict.";
   for (;;) {
+    step(ctx, 'reviewing the upmerge');
     console.log('Asking Claude to review the upmerge...');
     const code = run(cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
     if (code === 0) break;
@@ -319,7 +339,10 @@ async function buildAndReview(ctx, merged) {
   if (!opts.build || !buildEnabled(config, version)) ctx.result.build = 'off';
   else if (!wantBuild) ctx.result.build = 'ok';
   if (!wantBuild && !wantReview) return;
-  const free = await acquireBuildSlot(config.maxParallelBuilds || 2, () => console.log('Waiting for a free build slot...'));
+  const free = await acquireBuildSlot(config.maxParallelBuilds || 2, () => {
+    step(ctx, 'waiting for a build slot');
+    console.log('Waiting for a free build slot...');
+  });
   try {
     if (wantBuild) await buildUntilOk(ctx);
     if (wantReview && (await review(ctx)) && wantBuild) await buildUntilOk(ctx);
@@ -328,16 +351,17 @@ async function buildAndReview(ctx, merged) {
   }
 }
 
-function openEditor(config, file) {
-  const editor = config.editor || process.env.VISUAL || process.env.EDITOR || 'vi';
+function openEditor(ctx, file) {
+  const editor = ctx.config.editor || process.env.VISUAL || process.env.EDITOR || 'vi';
   // Through sh, so editors with arguments work ("code --wait").
-  const code = run('sh', ['-c', `${editor} "$1"`, 'sh', file]);
+  const code = runWaiting(ctx, 'your editor, for the changelog', 'sh', ['-c', `${editor} "$1"`, 'sh', file]);
   if (code !== 0) console.log(c.yellow(`The editor exited with code ${code}.`));
 }
 
 // Returns the final changelog text, or null to skip this version's release.
 async function editChangelog(ctx, props, since) {
   const { repo, version, ui, config } = ctx;
+  step(ctx, 'editing the changelog');
   const file = path.join(ctx.stateDir, 'changelog-draft.txt');
   let regenerate = true;
   if (fs.existsSync(file)) {
@@ -363,7 +387,7 @@ async function editChangelog(ctx, props, since) {
   }
   for (;;) {
     console.log(`Opening the changelog draft for ${version.name}: ${c.dim(file)}`);
-    openEditor(config, file);
+    openEditor(ctx, file);
     const { text, errors } = finalizeChangelog(fs.readFileSync(file, 'utf8'));
     if (!errors.length) return text;
     console.log(c.red(`The changelog is not ready:\n${errors.map(e => `  - ${e}`).join('\n')}`));
@@ -378,6 +402,7 @@ async function editChangelog(ctx, props, since) {
 }
 
 async function chooseBump(ctx, current, text) {
+  step(ctx, 'choosing the version bump');
   const [major, minor, patch] = current.split('.').map(Number);
   const next = { patch: `${major}.${minor}.${patch + 1}`, minor: `${major}.${minor + 1}.0`, major: `${major + 1}.0.0` };
   const suggested = suggestBump(text);
@@ -407,6 +432,7 @@ async function placeChangelog(ctx, bump, text) {
 // Warns when a dependency in the same version dir has unreleased changes or a running chain.
 async function checkDependencies(ctx) {
   const { repo, version, ui, depFound, mod, config } = ctx;
+  step(ctx, 'checking dependencies');
   for (;;) {
     const props = readWorkingProps(repo);
     const warnings = [];
@@ -438,6 +464,7 @@ async function checkDependencies(ctx) {
 // With --confirm: shows what is about to be published and asks before pushing.
 async function confirmPush(ctx) {
   const { repo, version, ui, result, mod, opts } = ctx;
+  step(ctx, 'confirming the release');
   const props = readWorkingProps(repo);
   const tag = `${props.minecraft_version}-${props.mod_version}`;
   const commits = (await git(repo, ['log', '--format=%h %s', `refs/remotes/origin/${version.branch}..HEAD`])).split('\n').filter(Boolean);
@@ -459,6 +486,7 @@ async function confirmPush(ctx) {
 
 async function release(ctx) {
   const { repo, version, ui, result } = ctx;
+  step(ctx, 'releasing');
   for (;;) {
     if (run('cc-release', [], { cwd: repo }) === 0) break;
     const answer = await ui.choose('cc-release failed.', [
@@ -479,6 +507,7 @@ async function release(ctx) {
 
 async function pushUpmerge(ctx, why) {
   const { repo, version, ui, result } = ctx;
+  step(ctx, 'pushing the upmerge');
   const ahead = await count(repo, [`refs/remotes/origin/${version.branch}..HEAD`]);
   if (!ahead) {
     result.release = `nothing to push (${why})`;
@@ -656,7 +685,8 @@ async function main() {
     fail(`\nFix the problems above first (${blocked.map(v => v.name).join(', ')}).`);
   }
 
-  const ui = new Prompter({ notify: config.notify !== false, title: `cc-release-chain ${mod}` });
+  const progress = new ChainProgress(mod, { rehearsal: !!rehearsal, versions: chain.map(v => v.name) });
+  const ui = new Prompter({ notify: config.notify !== false, title: `cc-release-chain ${mod}`, onWait: q => progress.waiting(q) });
   const results = [];
   let previous = null;
   try {
@@ -680,7 +710,7 @@ async function main() {
       const result = { name: version.name };
       results.push(result);
       const ctx = {
-        config, opts, ui, found, depFound, mod, version, lower, src, repo, result, previous,
+        config, opts, ui, found, depFound, mod, version, lower, src, repo, result, previous, progress,
         upmergeOnly,
         stateDir: stateDirOf(repo),
         state: states[version.index] || {},

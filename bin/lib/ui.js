@@ -20,7 +20,9 @@ const ALERT_AFTER_MS = 20000;
 
 // Reads answers line by line, from a terminal or piped input.
 class Prompter {
-  constructor({ notify = true, title = 'cc-helpers' } = {}) {
+  // onWait(question) is called when a question waits for an answer, and onWait(null) after it.
+  constructor({ notify = true, title = 'cc-helpers', onWait = () => {} } = {}) {
+    this.onWait = onWait;
     this.queue = [];
     this.waiting = null;
     this.closed = false;
@@ -54,7 +56,9 @@ class Prompter {
   async ask(question) {
     this.alert(question);
     process.stdout.write(`${question} `);
+    this.onWait(question.split('\n')[0].replace(/\x1b\[[0-9;]*m/g, ''));
     const line = await this.nextLine();
+    this.onWait(null);
     if (line === null) throw new Error('No answer: input was closed');
     if (!process.stdin.isTTY) process.stdout.write(`${line}\n`);
     this.lastAnswer = Date.now();

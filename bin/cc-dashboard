@@ -10,6 +10,7 @@ const { spawn, spawnSync } = require('child_process');
 const { loadConfig, configPath } = require('./lib/config');
 const { Monitor } = require('./lib/monitor');
 const { createDashboardServer } = require('./lib/dashboard-server');
+const { createActions } = require('./lib/dashboard-actions');
 const { runningDashboard, writeInfo, removeInfo } = require('./lib/dashboard-client');
 const { stateDir } = require('./lib/lock');
 
@@ -77,7 +78,7 @@ async function run(opts) {
   const log = msg => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
   const monitor = new Monitor({ log });
   const token = crypto.randomBytes(24).toString('hex');
-  const dashboard = createDashboardServer(monitor, { token, log });
+  const dashboard = createDashboardServer(monitor, { token, log, actions: createActions(monitor) });
   let actual;
   try {
     actual = await dashboard.listen(port);
