@@ -3,6 +3,7 @@ CommonCapabilities         1     1↑1
 
 N: unreleased commits  ↑N: commits to upmerge from lower versions  t: only translations
 new: no release on this MC version yet  !: local checkout needs attention (see -v)  -: no checkout  ?: error
+Mods without any release (like compat mods) are only upmerged.
 
 To do, by lowest MC version:
 1.21-lts: CommonCapabilities

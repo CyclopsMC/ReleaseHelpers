@@ -3,7 +3,7 @@
 // Shows which mods need a release (or upmerge) on which maintained MC versions.
 
 const { loadConfig } = require('./lib/config');
-const { discoverMods, checkVersionDirs, computeStatus, chainStart, cellUserFacing } = require('./lib/status');
+const { discoverMods, checkVersionDirs, computeStatus, chainStart, cellUserFacing, isUpmergeOnly } = require('./lib/status');
 
 const HELP = `Usage: cc-status [options] [mod...]
 
@@ -52,12 +52,15 @@ const dim = paint('2');
 const red = paint('31');
 const yellow = paint('33');
 
-function cellText(cell) {
+function cellText(cell, upmergeOnly) {
   if (cell.missing) return '-';
   if (cell.error) return '?';
   let t = '';
-  if (!cell.lastRelease) t = 'new';
-  else if (cell.unreleased.userFacing.length) t = String(cell.unreleased.userFacing.length);
+  if (!cell.lastRelease) {
+    if (!upmergeOnly) t = 'new';
+  } else if (cell.unreleased.userFacing.length) {
+    t = String(cell.unreleased.userFacing.length);
+  }
   if (cell.pending.userFacing.length) t += `↑${cell.pending.userFacing.length}`;
   const commits = cellUserFacing(cell);
   if (commits.length && commits.every(c => c.kind === 'translations')) t += 't';
@@ -74,7 +77,7 @@ function colorCell(text, cell) {
 
 function printTable(config, mods, status) {
   const nameWidth = Math.max(...mods.map(m => m.length));
-  const texts = mods.map(m => status[m].map(cellText));
+  const texts = mods.map(m => status[m].map(cell => cellText(cell, isUpmergeOnly(status[m]))));
   const widths = config.versions.map((v, i) => Math.max(v.name.length, ...texts.map(row => row[i].length)) + 2);
   let header = ' '.repeat(nameWidth);
   config.versions.forEach((v, i) => { header += v.name.padStart(widths[i]); });
@@ -85,29 +88,33 @@ function printTable(config, mods, status) {
     console.log(line);
   });
   console.log(dim('\nN: unreleased commits  ↑N: commits to upmerge from lower versions  t: only translations\n'
-    + 'new: no release on this MC version yet  !: local checkout needs attention (see -v)  -: no checkout  ?: error'));
+    + 'new: no release on this MC version yet  !: local checkout needs attention (see -v)  -: no checkout  ?: error\n'
+    + 'Mods without any release (like compat mods) are only upmerged.'));
 }
 
 function printTodo(config, mods, status) {
   const groups = config.versions.map(() => []);
   const translationGroups = config.versions.map(() => []);
+  const upmergeGroups = config.versions.map(() => []);
   for (const m of mods) {
     const start = chainStart(status[m]);
     if (start < 0) continue;
     const commits = status[m].slice(start).flatMap(cellUserFacing);
-    (commits.every(c => c.kind === 'translations') ? translationGroups : groups)[start].push(m);
+    if (isUpmergeOnly(status[m])) upmergeGroups[start].push(m);
+    else (commits.every(c => c.kind === 'translations') ? translationGroups : groups)[start].push(m);
   }
   const print = (title, gs) => {
     if (!gs.some(g => g.length)) return;
     console.log(bold(`\n${title}`));
     gs.forEach((g, i) => { if (g.length) console.log(`${config.versions[i].name}: ${g.join(', ')}`); });
   };
-  if (!groups.some(g => g.length) && !translationGroups.some(g => g.length)) {
+  if (![groups, translationGroups, upmergeGroups].some(gs => gs.some(g => g.length))) {
     console.log(bold('\nNothing to release.'));
     return;
   }
   print('To do, by lowest MC version:', groups);
   print('Only translations:', translationGroups);
+  print('Upmerge only:', upmergeGroups);
 }
 
 function printCommits(title, commits, withReason) {
@@ -136,7 +143,8 @@ function printVerbose(config, mods, status) {
         console.log(`  ${v.name}: ${red(cell.error)}`);
         continue;
       }
-      console.log(`  ${v.name} ${dim(cell.lastRelease ? `(last release ${cell.lastRelease})` : `(no ${cell.mc} release yet)`)}`);
+      const note = cell.lastRelease ? `last release ${cell.lastRelease}` : (isUpmergeOnly(status[m]) ? 'upmerge only' : `no ${cell.mc} release yet`);
+      console.log(`  ${v.name} ${dim(`(${note})`)}`);
       if (cell.unreleased) printCommits('unreleased', cell.unreleased.userFacing, false);
       printCommits('to upmerge', cell.pending.userFacing, false);
       const dropped = (cell.unreleased ? cell.unreleased.dropped : []).concat(cell.pending.dropped);

@@ -4,6 +4,7 @@
 // Needs network access (clones from GitHub). Prints a transcript of the commands and their output.
 // Run with: node --test --test-reporter=spec test/real/*.test.js
 // After an intended change to drafts or cc-status: UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec test/real/*.test.js
+// Set CC_REAL_REPOS_DIR to keep the clones between runs.
 
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert');

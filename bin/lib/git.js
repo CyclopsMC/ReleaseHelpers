@@ -15,8 +15,13 @@ function git(cwd, args, { timeout = 0 } = {}) {
       env: GIT_ENV(),
     }, (err, stdout, stderr) => {
       if (err) {
-        const detail = (stderr || '').trim() || (err.killed ? 'timed out' : err.message);
-        reject(new Error(`git ${args[0]}: ${detail}`));
+        // The lines saying what went wrong, without progress lines like "From <url>".
+        const lines = (stderr || '').split('\n').map(l => l.trim()).filter(Boolean);
+        const problems = lines.filter(l => /^(fatal|error|!)/.test(l));
+        const detail = (problems.length ? problems : lines).join('; ') || (err.killed ? 'timed out' : err.message);
+        const error = new Error(`git ${args[0]}: ${detail}`);
+        error.stderr = stderr || '';
+        reject(error);
       } else {
         resolve(stdout);
       }

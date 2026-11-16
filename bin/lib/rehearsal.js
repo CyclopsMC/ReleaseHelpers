@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { git, gitOrNull } = require('./git');
 const { stateDir } = require('./lock');
+const { fetchBranches } = require('./status');
 
 const lines = out => (out || '').split('\n').filter(Boolean);
 const timestamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
@@ -77,11 +78,17 @@ async function createRehearsal(config, found, mod, log = console.log) {
   for (const v of present) objectDirs.push(path.join(await absoluteGitDir(path.join(v.dir, mod)), 'objects'));
   fs.writeFileSync(path.join(origin, 'objects', 'info', 'alternates'), `${objectDirs.join('\n')}\n`);
 
-  // The stand-in origin starts as the real origin, as last fetched by each checkout.
+  // The stand-in origin starts as the real origin, as just fetched by each checkout. Tags that
+  // differ from origin would make the rehearsal start from other releases than a real chain.
+  const problems = [];
   for (const v of present) {
     const real = path.join(v.dir, mod);
     log(`Fetching ${mod} ${v.name}...`);
-    await git(real, ['fetch', '--quiet', '--tags', 'origin', `+refs/heads/${v.branch}:refs/remotes/origin/${v.branch}`]);
+    const clobbered = await fetchBranches(real, v.branch, []);
+    if (clobbered.length) {
+      problems.push(`${real}: ${clobbered.length === 1 ? 'tag' : 'tags'} ${clobbered.join(', ')} ${clobbered.length === 1 ? 'differs' : 'differ'} `
+        + 'from origin (to use the ones from origin: git fetch --tags --force origin)');
+    }
     await git(origin, ['fetch', '--quiet', real, `+refs/remotes/origin/${v.branch}:refs/heads/${v.branch}`, '+refs/tags/*:refs/tags/*']);
   }
 
@@ -118,7 +125,7 @@ async function createRehearsal(config, found, mod, log = console.log) {
       if (!remote.includes(origin)) throw new Error(`rehearsal copy ${copy} has an unexpected remote: ${remote}`);
     }
   }
-  return { root, origin, config: { ...config, versions }, before: await refsOf(origin), notes };
+  return { root, origin, config: { ...config, versions }, before: await refsOf(origin), notes, problems };
 }
 
 // What the rehearsal pushed: [{ branch, commits }] and [{ tag, changelog }].

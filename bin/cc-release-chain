@@ -8,7 +8,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { loadConfig } = require('./lib/config');
 const { git, gitOrNull } = require('./lib/git');
-const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing } = require('./lib/status');
+const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing, isUpmergeOnly } = require('./lib/status');
 const { listCommits, partition } = require('./lib/commits');
 const { readWorkingProps, readPropsAt, cyclopsVersion } = require('./lib/props');
 const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/changelog');
@@ -134,7 +134,8 @@ async function sync(ctx) {
   const { repo, version, ui } = ctx;
   const branch = await gitOrNull(repo, ['symbolic-ref', '-q', '--short', 'HEAD']);
   if (branch !== version.branch) throw new Abort(`${repo} is on ${branch || 'a detached HEAD'}, expected ${version.branch}`);
-  await git(repo, ['fetch', '--quiet', '--tags', 'origin', `+refs/heads/${version.branch}:refs/remotes/origin/${version.branch}`]);
+  // New tags come along with the branch. Tags that differ from origin were reported before starting.
+  await git(repo, ['fetch', '--quiet', 'origin', `+refs/heads/${version.branch}:refs/remotes/origin/${version.branch}`]);
   if (await isMerging(repo)) return;
   const remote = `refs/remotes/origin/${version.branch}`;
   const behind = await count(repo, [`HEAD..${remote}`]);
@@ -480,7 +481,7 @@ async function pushUpmerge(ctx, why) {
   const { repo, version, ui, result } = ctx;
   const ahead = await count(repo, [`refs/remotes/origin/${version.branch}..HEAD`]);
   if (!ahead) {
-    result.release = `not released (${why})`;
+    result.release = `nothing to push (${why})`;
     return;
   }
   if (await ui.confirm(`${why[0].toUpperCase()}${why.slice(1)}. Push the upmerge (${plural(ahead, 'commit')}) to origin/${version.branch}?`, true)) {
@@ -518,6 +519,11 @@ async function releaseVersion(ctx) {
   if (await pushUnpushedTag(ctx)) return;
   const merged = await upmerge(ctx);
   await buildAndReview(ctx, merged);
+  if (ctx.upmergeOnly) {
+    await pushUpmerge(ctx, 'this mod is only upmerged, it has no releases');
+    clearState(ctx);
+    return;
+  }
 
   let props = readWorkingProps(repo);
   const committed = await readPropsAt(repo, 'HEAD');
@@ -557,9 +563,9 @@ async function releaseVersion(ctx) {
 
 // --- Main --------------------------------------------------------------------------------
 
-function describeCell(cell) {
+function describeCell(cell, upmergeOnly) {
   if (cell.error) return c.red(cell.error);
-  const parts = [cell.lastRelease ? `last release ${cell.lastRelease}` : `no ${cell.mc} release yet`];
+  const parts = [cell.lastRelease ? `last release ${cell.lastRelease}` : (upmergeOnly ? 'only upmerged (no releases)' : `no ${cell.mc} release yet`)];
   if (cell.unreleased && cell.unreleased.userFacing.length) parts.push(plural(cell.unreleased.userFacing.length, 'unreleased change'));
   if (cell.pending.userFacing.length) parts.push(`${cell.pending.userFacing.length} to upmerge`);
   if (cell.local.length) parts.push(c.yellow(cell.local.join(', ')));
@@ -594,6 +600,10 @@ async function main() {
     console.log(c.bold(`Setting up a rehearsal for ${mod}: nothing will be pushed to the real origin.`));
     rehearsal = await createRehearsal(config, found, mod);
     for (const n of rehearsal.notes) console.log(`${c.yellow('Note:')} ${n}`);
+    if (rehearsal.problems.length) {
+      fs.rmSync(rehearsal.root, { recursive: true, force: true });
+      fail(`${rehearsal.problems.map(p => `${c.red('Problem:')} ${p}`).join('\n')}\nFix these first, as a real chain would refuse to start too.`);
+    }
     config = rehearsal.config;
     found = discoverMods(config);
   } else if (!tryLock(modLockDir(mod))) {
@@ -631,11 +641,13 @@ async function main() {
     }
   });
 
+  // Mods without any release, like the compat mods, are only upmerged.
+  const upmergeOnly = isUpmergeOnly(present.map(v => cells[v.index]));
   console.log(c.bold(`\nRelease chain for ${mod}${rehearsal ? ' (rehearsal)' : ''}:`));
   const width = Math.max(...chain.map(v => v.name.length));
   for (const v of chain) {
     const resume = states[v.index] ? c.cyan(' (continuing an earlier run)') : '';
-    console.log(`  ${v.name.padEnd(width)}  ${describeCell(cells[v.index])}${resume}`);
+    console.log(`  ${v.name.padEnd(width)}  ${describeCell(cells[v.index], upmergeOnly)}${resume}`);
   }
   const blocked = chain.filter(v => cells[v.index].error
     || (!states[v.index] && cells[v.index].local.some(issue => !/unpushed/.test(issue))));
@@ -669,6 +681,7 @@ async function main() {
       results.push(result);
       const ctx = {
         config, opts, ui, found, depFound, mod, version, lower, src, repo, result, previous,
+        upmergeOnly,
         stateDir: stateDirOf(repo),
         state: states[version.index] || {},
         resuming: !!states[version.index],
