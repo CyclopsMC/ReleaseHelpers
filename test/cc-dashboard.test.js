@@ -142,8 +142,12 @@ test('streams the state as server-sent events', async () => {
 test('updates by itself when a checkout changes', async () => {
   // An unpushed commit: the watcher of .git notices, with no refresh asked.
   sb.commit(sb.path('mc21-lts', 'ModA'), 'Local work', { 'src/main/java/A.java': 'local' });
-  const s = await waitForTexts('ModA', ['1', '↑1!']);
-  assert.deepStrictEqual(s.mods.find(m => m.name === 'ModA').cells[1].local, ['1 unpushed commit']);
+  // Not the moment between git add and git commit, which shows uncommitted changes.
+  const s = await waitFor(async () => {
+    const st = await state();
+    return JSON.stringify(st.mods.find(m => m.name === 'ModA').cells[1].local) === '["1 unpushed commit"]' && st;
+  }, 'the unpushed commit to show');
+  assert.deepStrictEqual(texts(s, 'ModA'), ['1', '↑1!']);
   sb.git(sb.path('mc21-lts', 'ModA'), 'reset', '-q', '--hard', 'origin/master-1.21-lts');
   await waitForTexts('ModA', ['1', '↑1']);
 });
