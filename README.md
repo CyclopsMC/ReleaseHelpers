@@ -64,6 +64,7 @@ To do, by lowest MC version:
 - `new`: no release on this MC version yet.
 - `!`: the local checkout needs attention: wrong branch, uncommitted changes, unpushed commits or a merge in progress.
 - `-`: no checkout for this version. `?`: error, see the bottom of the output.
+- Mods without any release on any version (like the compat mods) are only upmerged: their cells only show `↑N`, and they are listed under "Upmerge only".
 
 The "To do" list groups mods by the lowest MC version that needs work, which is where a release chain for that mod starts.
 
