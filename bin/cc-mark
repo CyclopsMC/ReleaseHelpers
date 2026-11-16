@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+'use strict';
+// Marks commits as needing a release or not, for cc-status and the other helpers.
+
+const path = require('path');
+const { gitOrNull } = require('./lib/git');
+const { loadMarks, setMark, clearMark, marksPath } = require('./lib/marks');
+
+const HELP = `Usage: cc-mark <no-release|release|clear> <commit>... [--reason <text>]
+       cc-mark list
+
+Marks commits for cc-status, cc-changelog-draft and cc-release-chain, overriding the commit filter:
+  no-release   the commit needs no release (e.g. a build change that also touched a source file)
+  release      the commit needs a release, although the filter drops it
+  clear        remove the mark
+  list         show all marks
+
+Commits are hashes (at least 7 characters), looked up in the current checkout, or else in the
+mod checkouts of the config. As upmerges keep commit hashes, one mark covers all MC versions.
+Marks are stored in ${marksPath()}.
+`;
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+async function lookup(dir, ref) {
+  const hash = await gitOrNull(dir, ['rev-parse', '-q', '--verify', `${ref}^{commit}`]);
+  if (!hash) return null;
+  const subject = await gitOrNull(dir, ['log', '-1', '--format=%s', hash]);
+  const top = await gitOrNull(dir, ['rev-parse', '--show-toplevel']);
+  return { hash, subject, mod: path.basename(top || dir) };
+}
+
+// Finds the commit in the current checkout, or else in all mod checkouts.
+async function resolve(ref) {
+  if (!/^[0-9a-f]{7,40}$/i.test(ref)) fail(`${ref} is not a commit hash of at least 7 characters`);
+  const here = await lookup(process.cwd(), ref);
+  if (here) return here;
+  const { loadConfig } = require('./lib/config');
+  const { discoverMods } = require('./lib/status');
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    fail(`${ref} is not in the current dir, and the mod checkouts can't be searched: ${e.message}`);
+  }
+  const { mods, byVersion } = discoverMods(config);
+  const found = new Map();
+  for (const mod of mods) {
+    const v = config.versions.find((_, i) => byVersion[i].has(mod));
+    const r = await lookup(path.join(v.dir, mod), ref);
+    if (r) found.set(r.hash, r);
+  }
+  if (found.size === 0) fail(`Commit ${ref} not found in the current dir or in any mod checkout`);
+  if (found.size > 1) fail(`${ref} is ambiguous: ${[...found.values()].map(r => `${r.mod} ${r.hash.slice(0, 12)}`).join(', ')}`);
+  return [...found.values()][0];
+}
+
+function list() {
+  const entries = Object.entries(loadMarks().commits)
+    .sort((a, b) => String(a[1].date).localeCompare(String(b[1].date)));
+  if (!entries.length) {
+    console.log('No marks yet.');
+    return;
+  }
+  for (const [hash, m] of entries) {
+    console.log(`${(m.release ? 'release' : 'no release').padEnd(10)}  ${hash.slice(0, 9)}  ${m.mod || '?'}  ${m.subject || ''}`
+      + `${m.reason ? `  (${m.reason})` : ''}`);
+  }
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (!args.length || args.includes('-h') || args.includes('--help')) {
+    process.stdout.write(HELP);
+    process.exit(args.length ? 0 : 1);
+  }
+  const action = args.shift();
+  if (action === 'list') return list();
+  if (!['no-release', 'release', 'clear'].includes(action)) fail(`Unknown action ${action}\n\n${HELP}`);
+  let reason;
+  const refs = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reason') reason = args[++i];
+    else if (args[i].startsWith('-')) fail(`Unknown option ${args[i]}`);
+    else refs.push(args[i]);
+  }
+  if (!refs.length) fail('Give at least one commit hash');
+  for (const ref of refs) {
+    const c = await resolve(ref);
+    if (action === 'clear') {
+      clearMark(c.hash);
+      console.log(`Cleared the mark of ${c.hash.slice(0, 9)} ${c.mod}: ${c.subject}`);
+    } else {
+      setMark(c.hash, { release: action === 'release', subject: c.subject, mod: c.mod, reason });
+      console.log(`Marked ${c.hash.slice(0, 9)} ${c.mod}: ${c.subject} as ${action === 'release' ? 'needing a release' : 'needing no release'}`);
+    }
+  }
+}
+
+main().catch(e => fail(e.stack || e.message));

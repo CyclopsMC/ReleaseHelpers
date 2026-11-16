@@ -8,6 +8,7 @@ const { gitOrNull } = require('./lib/git');
 const { readWorkingProps, cyclopsVersion } = require('./lib/props');
 const { draftChangelog } = require('./lib/changelog');
 const { loadConfig } = require('./lib/config');
+const { loadMarks } = require('./lib/marks');
 
 const HELP = `Usage: cc-changelog-draft [options]
 
@@ -54,11 +55,12 @@ function defaultSource(cwd) {
   }
 }
 
+// Without a config, your marks still apply.
 function commitFilter() {
   try {
     return loadConfig().commitFilter;
   } catch (e) {
-    return {};
+    return { marks: loadMarks().commits };
   }
 }
 

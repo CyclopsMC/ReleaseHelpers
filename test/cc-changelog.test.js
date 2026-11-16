@@ -98,13 +98,17 @@ test('without a source branch, every commit is drafted from its message', () => 
   assert.ok(!r.out.includes('AGENTS'));
 });
 
-test('leaves out commits ignored in the config', () => {
+test('leaves out commits marked as no release, also without a config', () => {
   const fix = sb.git(mc21, 'log', '-1', '--format=%h', '--grep=Fix 1.21 only bug').trim();
-  sb.write(sb.path('ignore.json'), JSON.stringify({ versions: [{ dir: sb.path('mc21-lts'), branch: 'master-1.21-lts' }], ignoreCommits: [fix] }));
-  const r = sb.run('cc-changelog-draft', [], { cwd: mc21, env: { CC_HELPERS_CONFIG: sb.path('ignore.json') } });
-  assert.strictEqual(r.code, 0, r.err);
-  assert.ok(!/^\* Fix 1\.21 only bug/m.test(r.out), r.out);
-  assert.match(r.out, new RegExp(`^#   ${fix}[0-9a-f]* Fix 1\\.21 only bug \\(ignored in the config\\)$`, 'm'));
+  assert.strictEqual(sb.run('cc-mark', ['no-release', fix], { cwd: mc21 }).code, 0);
+  try {
+    const r = sb.run('cc-changelog-draft', [], { cwd: mc21, env: { CC_HELPERS_CONFIG: sb.path('missing.json') } });
+    assert.strictEqual(r.code, 0, r.err);
+    assert.ok(!/^\* Fix 1\.21 only bug/m.test(r.out), r.out);
+    assert.match(r.out, new RegExp(`^#   ${fix}[0-9a-f]* Fix 1\\.21 only bug \\(marked as no release\\)$`, 'm'));
+  } finally {
+    sb.run('cc-mark', ['clear', fix], { cwd: mc21 });
+  }
 });
 
 test('fails clearly when the last release tag is missing', () => {

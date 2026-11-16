@@ -7,6 +7,7 @@ const path = require('path');
 const { git, gitOrNull, runPool } = require('./git');
 const { listCommits, partition } = require('./commits');
 const { readPropsAt } = require('./props');
+const { githubRepo, githubToken, remoteRefs } = require('./github');
 
 const FETCH_TIMEOUT_MS = 120000;
 
@@ -32,22 +33,25 @@ function isModRepo(dir) {
     .some(f => /^mod_version\s*=/m.test(readFileOrNull(path.join(dir, f)) || ''));
 }
 
-// Repository name of origin, e.g. "EvilCraft" for git@github.com:CyclopsMC/EvilCraft.git.
-function originName(dir) {
-  let url = null;
+// URL of origin, from .git/config (fast, as this runs for every checkout).
+function originUrl(dir) {
   const config = readFileOrNull(path.join(dir, '.git', 'config'));
   if (config !== null) {
     const section = /\[remote "origin"\]([^[]*)/.exec(config);
     const m = section && /^\s*url\s*=\s*(.+?)\s*$/m.exec(section[1]);
-    url = m ? m[1] : null;
-  } else {
-    // A worktree or submodule-style .git file.
-    try {
-      url = execFileSync('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch (e) {
-      url = null;
-    }
+    return m ? m[1] : null;
   }
+  // A worktree or submodule-style .git file.
+  try {
+    return execFileSync('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    return null;
+  }
+}
+
+// Repository name of origin, e.g. "EvilCraft" for git@github.com:CyclopsMC/EvilCraft.git.
+function originName(dir) {
+  const url = originUrl(dir);
   return url ? url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:\\]/).pop() : null;
 }
 
@@ -198,25 +202,67 @@ function cellUserFacing(cell) {
   return (cell.unreleased ? cell.unreleased.userFacing : []).concat(cell.pending.userFacing);
 }
 
-// Computes status[mod][versionIndex] for the given mods.
-async function computeStatus(config, { mods, byVersion }, { fetch = true, jobs = 8, onProgress } = {}) {
-  const status = {};
-  const tasks = [];
+// The checkouts for each mod and version, with the lower branches they compare against.
+function checkouts(config, { mods, byVersion }) {
+  const list = [];
   for (const mod of mods) {
-    status[mod] = config.versions.map(() => ({ missing: true }));
     config.versions.forEach((version, i) => {
       if (!byVersion[i].has(mod)) return;
       const lowerBranches = config.versions.slice(0, i).filter((_, j) => byVersion[j].has(mod)).map(v => v.branch);
-      const repoDir = path.join(version.dir, mod);
-      tasks.push(async () => {
-        try {
-          status[mod][i] = await cellStatus({ repoDir, version, lowerBranches, fetch, filter: config.commitFilter });
-        } catch (error) {
-          status[mod][i] = { error: error.message };
-        }
-      });
+      list.push({ mod, index: i, version, lowerBranches, repoDir: path.join(version.dir, mod) });
     });
   }
+  return list;
+}
+
+// Asks GitHub which checkouts have new commits or tags on origin, in one request.
+// Returns { toFetch: Set of repo dirs, total }, { error } if GitHub couldn't tell, or null
+// without a GitHub token.
+async function planFetches(config, found) {
+  const token = githubToken();
+  if (!token) return null;
+  const list = checkouts(config, found);
+  const repoOf = new Map(list.map(c => [c.repoDir, githubRepo(originUrl(c.repoDir))]));
+  const repos = [...new Map([...repoOf.values()].filter(Boolean).map(r => [`${r.owner}/${r.name}`.toLowerCase(), r])).values()];
+  let remote;
+  try {
+    remote = await remoteRefs(repos, token);
+  } catch (e) {
+    return { error: e.message };
+  }
+  const toFetch = new Set();
+  await runPool(list.map(c => async () => {
+    const r = repoOf.get(c.repoDir);
+    const refs = r && remote.get(`${r.owner}/${r.name}`.toLowerCase());
+    if (!refs || await differsFromRemote(c, refs)) toFetch.add(c.repoDir);
+  }), config.jobs || 8);
+  return { toFetch, total: list.length };
+}
+
+async function differsFromRemote({ repoDir, version, lowerBranches }, { heads, tags }) {
+  const branches = [version.branch, ...lowerBranches];
+  const names = branches.map(b => `refs/remotes/origin/${b}`).concat(tags.map(t => `refs/tags/${t.name}`));
+  const out = await gitOrNull(repoDir, ['for-each-ref', '--format=%(refname) %(objectname)', ...names]);
+  if (out === null) return true;
+  const local = new Map(out.split('\n').filter(Boolean).map(l => l.split(' ')));
+  // A branch that is gone on origin but still known locally can't be told apart from a missing page.
+  if (branches.some(b => heads.get(b) !== local.get(`refs/remotes/origin/${b}`))) return true;
+  return tags.some(t => local.get(`refs/tags/${t.name}`) !== t.oid);
+}
+
+// Computes status[mod][versionIndex] for the given mods. `fetch` is a boolean, or a function
+// that says per repo dir whether to fetch.
+async function computeStatus(config, found, { fetch = true, jobs = 8, onProgress } = {}) {
+  const status = {};
+  for (const mod of found.mods) status[mod] = config.versions.map(() => ({ missing: true }));
+  const tasks = checkouts(config, found).map(({ mod, index, version, lowerBranches, repoDir }) => async () => {
+    try {
+      const doFetch = typeof fetch === 'function' ? fetch(repoDir) : fetch;
+      status[mod][index] = await cellStatus({ repoDir, version, lowerBranches, fetch: doFetch, filter: config.commitFilter });
+    } catch (error) {
+      status[mod][index] = { error: error.message };
+    }
+  });
   await runPool(tasks, jobs, onProgress);
   return status;
 }
@@ -232,4 +278,4 @@ function chainStart(cells) {
   return cells.findIndex(c => cellUserFacing(c).length > 0);
 }
 
-module.exports = { discoverMods, checkVersionDirs, computeStatus, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, fetchBranches };
+module.exports = { discoverMods, checkVersionDirs, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, fetchBranches };

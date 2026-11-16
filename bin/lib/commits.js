@@ -26,18 +26,30 @@ const DEV_ONLY_PATHS = [
 
 const TRANSLATION_FILE = /(^|\/)lang\/[^/]+$/;
 
-// The filter has extra `devOnlyPaths` (regexes) and `ignoreCommits` (hash prefixes) from the
-// config; an array is taken as devOnlyPaths.
+// In commit messages, says the commit needs no release.
+const NO_RELEASE_MARKER = /\[no[ -]release\]/i;
+
+// The filter has extra `devOnlyPaths` (regexes) from the config and your `marks` (by full hash,
+// see marks.js); an array is taken as devOnlyPaths.
 function filterOptions(filter = {}) {
-  return Array.isArray(filter) ? { devOnlyPaths: filter, ignoreCommits: [] } : { devOnlyPaths: [], ignoreCommits: [], ...filter };
+  return Array.isArray(filter) ? { devOnlyPaths: filter, marks: {} } : { devOnlyPaths: [], marks: {}, ...filter };
 }
 
-// Returns { userFacing: true, kind } or { userFacing: false, reason }.
+// Returns { userFacing: true, kind } or { userFacing: false, reason }, with `marked: true` when
+// your mark decided it.
 function classify(commit, filter) {
-  const { devOnlyPaths, ignoreCommits } = filterOptions(filter);
+  const { devOnlyPaths, marks } = filterOptions(filter);
+  const mark = marks[commit.hash];
+  if (mark && !mark.release) return { userFacing: false, reason: 'marked as no release', marked: true };
+  const result = classifyByContent(commit, devOnlyPaths);
+  if (mark && mark.release) return result.userFacing ? { ...result, marked: true } : { userFacing: true, kind: 'change', marked: true };
+  return result;
+}
+
+function classifyByContent(commit, devOnlyPaths) {
   const { subject, body, files } = commit;
-  if (ignoreCommits.some(h => commit.hash.startsWith(h))) {
-    return { userFacing: false, reason: 'ignored in the config' };
+  if (NO_RELEASE_MARKER.test(subject) || NO_RELEASE_MARKER.test(body)) {
+    return { userFacing: false, reason: 'marked [no release] in the message' };
   }
   if (/^Bump mod version\b/i.test(subject)) {
     return { userFacing: false, reason: 'release commit' };
@@ -81,8 +93,9 @@ function partition(commits, filter) {
   const dropped = [];
   for (const c of commits) {
     const r = classify(c, filter);
-    if (r.userFacing) userFacing.push({ ...c, kind: r.kind });
-    else dropped.push({ ...c, reason: r.reason });
+    const marked = r.marked ? { marked: true } : {};
+    if (r.userFacing) userFacing.push({ ...c, kind: r.kind, ...marked });
+    else dropped.push({ ...c, reason: r.reason, ...marked });
   }
   return { userFacing, dropped };
 }
