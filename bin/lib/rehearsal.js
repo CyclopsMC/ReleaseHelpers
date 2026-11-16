@@ -7,6 +7,7 @@ const path = require('path');
 const { git, gitOrNull } = require('./git');
 const { stateDir } = require('./lock');
 const { fetchBranches } = require('./status');
+const { readPropsAt } = require('./props');
 
 const lines = out => (out || '').split('\n').filter(Boolean);
 const timestamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
@@ -84,10 +85,12 @@ async function createRehearsal(config, found, mod, log = console.log) {
   for (const v of present) {
     const real = path.join(v.dir, mod);
     log(`Fetching ${mod} ${v.name}...`);
+    // Like the chain, only the last release matters.
     const clobbered = await fetchBranches(real, v.branch, []);
-    if (clobbered.length) {
-      problems.push(`${real}: ${clobbered.length === 1 ? 'tag' : 'tags'} ${clobbered.join(', ')} ${clobbered.length === 1 ? 'differs' : 'differ'} `
-        + 'from origin (to use the ones from origin: git fetch --tags --force origin)');
+    const props = await readPropsAt(real, `refs/remotes/origin/${v.branch}`);
+    const lastRelease = `${props.minecraft_version}-${props.mod_version}`;
+    if (clobbered.includes(lastRelease)) {
+      problems.push(`${real}: tag ${lastRelease} differs from origin (to use the ones from origin: git fetch --tags --force origin)`);
     }
     await git(origin, ['fetch', '--quiet', real, `+refs/remotes/origin/${v.branch}:refs/heads/${v.branch}`, '+refs/tags/*:refs/tags/*']);
   }

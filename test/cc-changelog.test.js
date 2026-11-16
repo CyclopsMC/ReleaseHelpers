@@ -98,6 +98,15 @@ test('without a source branch, every commit is drafted from its message', () => 
   assert.ok(!r.out.includes('AGENTS'));
 });
 
+test('leaves out commits ignored in the config', () => {
+  const fix = sb.git(mc21, 'log', '-1', '--format=%h', '--grep=Fix 1.21 only bug').trim();
+  sb.write(sb.path('ignore.json'), JSON.stringify({ versions: [{ dir: sb.path('mc21-lts'), branch: 'master-1.21-lts' }], ignoreCommits: [fix] }));
+  const r = sb.run('cc-changelog-draft', [], { cwd: mc21, env: { CC_HELPERS_CONFIG: sb.path('ignore.json') } });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.ok(!/^\* Fix 1\.21 only bug/m.test(r.out), r.out);
+  assert.match(r.out, new RegExp(`^#   ${fix}[0-9a-f]* Fix 1\\.21 only bug \\(ignored in the config\\)$`, 'm'));
+});
+
 test('fails clearly when the last release tag is missing', () => {
   const r = sb.run('cc-changelog-draft', ['--since', '1.21.1-9.9.9'], { cwd: mc21 });
   assert.strictEqual(r.code, 1);

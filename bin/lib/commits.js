@@ -26,9 +26,19 @@ const DEV_ONLY_PATHS = [
 
 const TRANSLATION_FILE = /(^|\/)lang\/[^/]+$/;
 
+// The filter has extra `devOnlyPaths` (regexes) and `ignoreCommits` (hash prefixes) from the
+// config; an array is taken as devOnlyPaths.
+function filterOptions(filter = {}) {
+  return Array.isArray(filter) ? { devOnlyPaths: filter, ignoreCommits: [] } : { devOnlyPaths: [], ignoreCommits: [], ...filter };
+}
+
 // Returns { userFacing: true, kind } or { userFacing: false, reason }.
-function classify(commit, extraDevOnlyPaths = []) {
+function classify(commit, filter) {
+  const { devOnlyPaths, ignoreCommits } = filterOptions(filter);
   const { subject, body, files } = commit;
+  if (ignoreCommits.some(h => commit.hash.startsWith(h))) {
+    return { userFacing: false, reason: 'ignored in the config' };
+  }
   if (/^Bump mod version\b/i.test(subject)) {
     return { userFacing: false, reason: 'release commit' };
   }
@@ -44,7 +54,7 @@ function classify(commit, extraDevOnlyPaths = []) {
   if (/^(New translations|Add translations through Crowdin)\b/i.test(subject) || files.every(f => TRANSLATION_FILE.test(f))) {
     return { userFacing: true, kind: 'translations' };
   }
-  const devOnly = DEV_ONLY_PATHS.concat(extraDevOnlyPaths);
+  const devOnly = DEV_ONLY_PATHS.concat(devOnlyPaths);
   if (files.every(f => devOnly.some(re => re.test(f)))) {
     return { userFacing: false, reason: 'only dev files' };
   }
@@ -66,11 +76,11 @@ async function listCommits(cwd, revArgs) {
 }
 
 // Splits commits into user-facing ones and dropped ones (with the reason).
-function partition(commits, extraDevOnlyPaths) {
+function partition(commits, filter) {
   const userFacing = [];
   const dropped = [];
   for (const c of commits) {
-    const r = classify(c, extraDevOnlyPaths);
+    const r = classify(c, filter);
     if (r.userFacing) userFacing.push({ ...c, kind: r.kind });
     else dropped.push({ ...c, reason: r.reason });
   }

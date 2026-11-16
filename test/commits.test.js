@@ -48,6 +48,12 @@ test('extra dev-only paths from the config are honored', () => {
   assert.strictEqual(classify(c('Tweak', ['docs/x.txt'])).userFacing, true);
 });
 
+test('commits listed in the config are dropped', () => {
+  const commit = { hash: 'abcdef1234567', subject: 'Fix crash', body: '', files: ['src/main/java/A.java'] };
+  assert.deepStrictEqual(classify(commit, { ignoreCommits: ['abcdef1'] }), { userFacing: false, reason: 'ignored in the config' });
+  assert.strictEqual(classify(commit, { ignoreCommits: ['1234567'] }).userFacing, true);
+});
+
 test('commits without file changes are dropped', () => {
   assert.strictEqual(classify(c('Empty', [])).userFacing, false);
 });

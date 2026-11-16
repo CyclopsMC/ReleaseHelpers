@@ -130,7 +130,8 @@ function printVerbose(config, mods, status) {
     const lines = [];
     status[m].forEach((cell, i) => {
       if (cell.missing) return;
-      const hasContent = cell.error || cell.local.length || cell.pending.userFacing.length || cell.pending.dropped.length
+      const hasContent = cell.error || cell.local.length || cell.otherDifferingTags.length
+        || cell.pending.userFacing.length || cell.pending.dropped.length
         || (cell.unreleased && (cell.unreleased.userFacing.length || cell.unreleased.dropped.length));
       if (hasContent) lines.push(i);
     });
@@ -150,6 +151,11 @@ function printVerbose(config, mods, status) {
       const dropped = (cell.unreleased ? cell.unreleased.dropped : []).concat(cell.pending.dropped);
       printCommits('dropped by filter', dropped, true);
       for (const issue of cell.local) console.log(`    ${red(`local: ${issue}`)}`);
+      if (cell.otherDifferingTags.length) {
+        const tags = cell.otherDifferingTags;
+        console.log(dim(`    note: ${tags.length === 1 ? 'older tag' : `${tags.length} older tags`} ${tags.join(', ')} `
+          + `${tags.length === 1 ? 'differs' : 'differ'} from origin, which doesn't affect this status (git fetch --tags --force origin syncs them)`));
+      }
     }
   }
 }
@@ -173,6 +179,9 @@ async function main() {
   }
 
   for (const w of checkVersionDirs(config)) process.stderr.write(`${yellow('Warning:')} ${w}\n`);
+  for (const s of found.skipped) {
+    process.stderr.write(dim(`Skipped ${s.version}/${s.name}: ${s.origin ? `it is a checkout of ${s.origin}` : 'it has no origin remote'}.\n`));
+  }
   let mods = found.mods;
   if (opts.mods.length) {
     mods = [...new Set(opts.mods.map(arg => {
