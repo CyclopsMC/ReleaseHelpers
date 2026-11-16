@@ -1,6 +1,6 @@
 #!/bin/bash
 if [ ! -f "secrets.properties_template" ]; then
-  ./gradlew uploadArchives
+  ./gradlew uploadArchives --offline
 else
   ./gradlew publishToMavenLocal
 fi
