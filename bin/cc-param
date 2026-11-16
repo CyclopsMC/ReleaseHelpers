@@ -45,6 +45,11 @@ case $name in
         echo $(prop cyclopscore_version) | sed "s/^\(.*\)-.*$/\1/"
         ;;
     modid)
+        id=$(prop mod_id)
+        if [[ ! -z $id ]]; then
+            echo $id
+        fi
+        
 		modpropfile="src/main/resources/mcmod.info"
 		modpropfile2="src/main/resources/META-INF/mods.toml"
 		modpropfile3="src/main/resources/META-INF/neoforge.mods.toml"
