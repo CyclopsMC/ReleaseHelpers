@@ -331,7 +331,17 @@ test('refuses to start when a release tag differs from origin', () => {
   const r = chain(['ModA'], 'y\n');
   assert.strictEqual(r.code, 1);
   assert.match(r.out, /tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
-  assert.match(r.err, /Fix the problems above first \(1\.20-lts, 1\.21-lts\)/);
+  assert.match(r.err, /Fix the problems above first \(1\.20-lts\)/);
+});
+
+test('has nothing to release when the only change is ignored in the config', () => {
+  setup();
+  const fix = sb.git(sb.path('mc20-lts', 'ModA'), 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
+  const config = JSON.parse(sb.read(sb.path('cc-helpers.json')));
+  sb.write(sb.path('cc-helpers.json'), JSON.stringify({ ...config, ignoreCommits: [fix] }));
+  const r = chain(['ModA'], '');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /Nothing to release for ModA\./);
 });
 
 test('refuses to run twice for the same mod', () => {

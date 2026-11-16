@@ -26,8 +26,12 @@ Start from [`cc-helpers.example.json`](cc-helpers.example.json):
 - `versions`: the maintained MC versions, from lowest to highest.
   Each `dir` holds one git checkout per mod, named after the mod (e.g. `~/mc20-lts/IntegratedDynamics`).
   A version's name is its branch without `master-` (e.g. `1.20-lts`), unless you set `name`.
+  Checkouts not named after their origin repository (e.g. a temporary copy) are skipped.
 - `jobs` (optional): how many repos to process in parallel. Default: 8.
 - `devOnlyPaths` (optional): extra regexes for files that don't affect players, on top of the built-in ones.
+- `ignoreCommits` (optional): hashes (or prefixes of at least 7 characters) of commits that don't need a release,
+  for the cases the file filter can't tell, e.g. a build change that also touched a source file.
+  As upmerges keep commit hashes, one entry covers all MC versions.
 
 Used by `cc-build` and `cc-release-chain` (all optional):
 
