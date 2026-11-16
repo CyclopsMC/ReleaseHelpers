@@ -121,6 +121,8 @@ before(() => {
   checkout('mc20-lts', 'ModC', 'master-1.20-lts');
   for (const m of ['ModA', 'ModB', 'ModC', 'ModD']) checkout('mc21-lts', m, 'master-1.21-lts');
   write(path.join(tmp, 'mc21-lts', '.upmerge-src-branch'), 'master-1.20-lts\n');
+  // A temporary copy of ModA, not named after its origin.
+  git(tmp, 'clone', '-q', '-b', 'master-1.20-lts', path.join(tmp, 'origin', 'ModA.git'), path.join(tmp, 'mc20-lts', 'ModA-tmp'));
   // Not mods: a plain dir and a repo without mod_version.
   fs.mkdirSync(path.join(tmp, 'mc20-lts', 'notes'));
   git(tmp, 'init', '-q', path.join(tmp, 'mc20-lts', 'OtherRepo'));
@@ -147,7 +149,8 @@ test('lists mods and versions for completion', () => {
 test('shows the status table', () => {
   const r = run(['--no-fetch']);
   assert.strictEqual(r.code, 0, r.err);
-  assert.strictEqual(r.err, '');
+  assert.strictEqual(r.err, 'Skipped 1.20-lts/ModA-tmp: it is a checkout of ModA.\n');
+  assert.ok(!r.out.includes('ModA-tmp'));
   assert.deepStrictEqual(row(r.out, 'ModA'), ['3', '↑3']);
   assert.deepStrictEqual(row(r.out, 'ModB'), ['-', '1t']);
   assert.deepStrictEqual(row(r.out, 'ModC'), ['.', '.!']);
@@ -227,4 +230,23 @@ test('reports tags that differ from origin instead of failing', () => {
   assert.ok(!r.out.includes('Errors:'), r.out);
   assert.deepStrictEqual(row(r.out, 'ModC'), ['1!', '↑1!']);
   assert.match(r.out, /local: tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
+  // In the 1.21 checkout, that tag isn't the last release, so it is only noted.
+  assert.match(r.out, /1\.21-lts \(last release 1\.21\.1-2\.0\.0\)\n(.*\n)*? {4}note: older tag 1\.20\.1-1\.0\.0 differs from origin, which doesn't affect this status/);
+  assert.strictEqual((r.out.match(/local: tag/g) || []).length, 1);
+});
+
+test('ignores commits listed in the config', () => {
+  const file = path.join(tmp, 'ignore.json');
+  const config = JSON.parse(fs.readFileSync(path.join(tmp, 'cc-helpers.json'), 'utf8'));
+  const fix = git(path.join(tmp, 'mc20-lts', 'ModA'), 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
+  write(file, JSON.stringify({ ...config, ignoreCommits: [fix] }));
+  const r = run(['--no-fetch', '-v', 'ModA'], { CC_HELPERS_CONFIG: file });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.deepStrictEqual(row(r.out, 'ModA'), ['2', '↑2']);
+  assert.match(r.out, new RegExp(`${fix}[0-9a-f]* Fix crash \\(ignored in the config\\)`));
+
+  write(file, JSON.stringify({ ...config, ignoreCommits: ['abc'] }));
+  const bad = run(['--no-fetch'], { CC_HELPERS_CONFIG: file });
+  assert.strictEqual(bad.code, 1);
+  assert.match(bad.err, /"ignoreCommits" needs commit hashes of at least 7 characters, not "abc"/);
 });
