@@ -48,10 +48,23 @@ test('extra dev-only paths from the config are honored', () => {
   assert.strictEqual(classify(c('Tweak', ['docs/x.txt'])).userFacing, true);
 });
 
-test('commits listed in the config are dropped', () => {
-  const commit = { hash: 'abcdef1234567', subject: 'Fix crash', body: '', files: ['src/main/java/A.java'] };
-  assert.deepStrictEqual(classify(commit, { ignoreCommits: ['abcdef1'] }), { userFacing: false, reason: 'ignored in the config' });
-  assert.strictEqual(classify(commit, { ignoreCommits: ['1234567'] }).userFacing, true);
+test('your marks override the filter, both ways', () => {
+  const fix = { hash: 'a'.repeat(40), subject: 'Enable the Gradle configuration cache', body: '', files: ['build.gradle', 'src/main/java/A.java'] };
+  const docs = { hash: 'b'.repeat(40), subject: 'Bump CyclopsCore requirement', body: '', files: ['gradle.properties'] };
+  const marks = { [fix.hash]: { release: false }, [docs.hash]: { release: true } };
+  assert.deepStrictEqual(classify(fix, { marks }), { userFacing: false, reason: 'marked as no release', marked: true });
+  assert.deepStrictEqual(classify(docs, { marks }), { userFacing: true, kind: 'change', marked: true });
+  assert.deepStrictEqual(classify(fix), { userFacing: true, kind: 'change' });
+  assert.strictEqual(classify(docs).userFacing, false);
+});
+
+test('[no release] in the message drops a commit', () => {
+  assert.deepStrictEqual(classify(c('Enable the Gradle configuration cache [no release]', ['src/main/java/A.java'])),
+    { userFacing: false, reason: 'marked [no release] in the message' });
+  assert.strictEqual(classify({ ...c('Tweak build', ['src/main/java/A.java']), body: 'Only for CI.\n\n[No-Release]' }).userFacing, false);
+  // A release mark wins over the marker.
+  const commit = { ...c('Tweak [no release]', ['src/main/java/A.java']), hash: 'c'.repeat(40) };
+  assert.strictEqual(classify(commit, { marks: { [commit.hash]: { release: true } } }).userFacing, true);
 });
 
 test('commits without file changes are dropped', () => {

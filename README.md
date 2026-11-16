@@ -4,7 +4,7 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-status`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-status`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
@@ -29,9 +29,7 @@ Start from [`cc-helpers.example.json`](cc-helpers.example.json):
   Checkouts not named after their origin repository (e.g. a temporary copy) are skipped.
 - `jobs` (optional): how many repos to process in parallel. Default: 8.
 - `devOnlyPaths` (optional): extra regexes for files that don't affect players, on top of the built-in ones.
-- `ignoreCommits` (optional): hashes (or prefixes of at least 7 characters) of commits that don't need a release,
-  for the cases the file filter can't tell, e.g. a build change that also touched a source file.
-  As upmerges keep commit hashes, one entry covers all MC versions.
+- `github` (optional): `false` to always fetch every checkout, instead of first asking GitHub what changed.
 
 ### Shell completion
 
@@ -76,6 +74,27 @@ Options:
 - `cc-status IntegratedDynamics EvilCraft`: only these mods.
 - `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
 - `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
+- `--fetch-all`: fetch every checkout, without asking GitHub what changed first.
+
+With a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the one of the [GitHub CLI](https://cli.github.com/), `gh auth login`), `cc-status` first asks GitHub for the branches and recent tags of all mods in one request, and only fetches the checkouts where something changed.
+Without a token, it fetches every checkout.
+
+### Commits that need no release
+
+The filter drops commits that only touch files players don't get, like build files and tests.
+For the commits it can't tell apart, e.g. a build change that also touched a source file:
+
+- Put `[no release]` anywhere in the commit message.
+  To have Claude do that for you, add this to `~/.claude/CLAUDE.md`:
+  `In mod repos, add "[no release]" to the body of commit messages for changes players won't notice, like build, CI or test changes.`
+- Or mark the commit afterwards, in a checkout or anywhere else:
+  ```bash
+  cc-mark no-release 1a2b3c4
+  ```
+  `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes a mark, and `cc-mark list` shows them all.
+  Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash: upmerges keep hashes, so one mark covers all MC versions.
+
+`cc-status -v` shows which commits were dropped and why, including your marks.
 
 ## Changelog drafts
 
