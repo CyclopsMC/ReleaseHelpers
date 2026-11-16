@@ -9,7 +9,7 @@ _cc_status() {
     return
   fi
   if [[ "$cur" == -* ]]; then
-    COMPREPLY=($(compgen -W "-v --verbose --no-fetch -j --jobs -h --help" -- "$cur"))
+    COMPREPLY=($(compgen -W "-v --verbose --no-fetch --fetch-all -j --jobs -h --help" -- "$cur"))
   else
     COMPREPLY=($(compgen -W "$(cc-status --list-mods 2>/dev/null)" -- "$cur"))
   fi
@@ -40,3 +40,15 @@ _cc_build() {
 complete -F _cc_status cc-status
 complete -F _cc_release_chain cc-release-chain
 complete -F _cc_build cc-build
+
+_cc_mark() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=()
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "no-release release clear list" -- "$cur"))
+  elif [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "--reason" -- "$cur"))
+  fi
+}
+
+complete -F _cc_mark cc-mark

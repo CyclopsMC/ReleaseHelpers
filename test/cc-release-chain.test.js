@@ -216,11 +216,11 @@ test('refuses to start when a release tag differs from origin', () => {
   assert.match(r.err, /Fix the problems above first \(1\.20-lts\)/);
 });
 
-test('has nothing to release when the only change is ignored in the config', () => {
+test('has nothing to release when the only change is marked as no release', () => {
   setup();
-  const fix = sb.git(sb.path('mc20-lts', 'ModA'), 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
-  const config = JSON.parse(sb.read(sb.path('cc-helpers.json')));
-  sb.write(sb.path('cc-helpers.json'), JSON.stringify({ ...config, ignoreCommits: [fix] }));
+  const modA = sb.path('mc20-lts', 'ModA');
+  const fix = sb.git(modA, 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
+  assert.strictEqual(sb.run('cc-mark', ['no-release', fix], { cwd: modA }).code, 0);
   const r = chain(['ModA'], '');
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.out, /Nothing to release for ModA\./);

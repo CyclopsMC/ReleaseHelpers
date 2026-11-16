@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { loadMarks } = require('./marks');
 
 function configPath() {
   return process.env.CC_HELPERS_CONFIG || path.join(os.homedir(), '.config', 'cc-helpers.json');
@@ -51,10 +52,12 @@ function loadConfig() {
       throw new Error(`${file}: invalid regex in "devOnlyPaths": ${r}`);
     }
   });
-  const ignoreCommits = (json.ignoreCommits || []).map(h => String(h).trim().toLowerCase());
-  const bad = ignoreCommits.find(h => !/^[0-9a-f]{7,40}$/.test(h));
-  if (bad !== undefined) throw new Error(`${file}: "ignoreCommits" needs commit hashes of at least 7 characters, not "${bad}"`);
-  return { ...json, file, versions, devOnlyPaths, ignoreCommits, commitFilter: { devOnlyPaths, ignoreCommits } };
+  if (json.ignoreCommits) {
+    throw new Error(`${file}: "ignoreCommits" is replaced by cc-mark. Run: cc-mark no-release ${json.ignoreCommits.join(' ')}\n`
+      + 'in one of the mod checkouts, and remove "ignoreCommits" from the config.');
+  }
+  const marks = loadMarks();
+  return { ...json, file, versions, devOnlyPaths, marks, commitFilter: { devOnlyPaths, marks: marks.commits } };
 }
 
 module.exports = { loadConfig, configPath };

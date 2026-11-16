@@ -6,9 +6,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync, spawnSync } = require('child_process');
+const http = require('http');
+const { execFileSync, spawn, spawnSync } = require('child_process');
 
 const BIN = path.join(__dirname, '..', 'bin', 'cc-status');
+const MARK = path.join(__dirname, '..', 'bin', 'cc-mark');
 let tmp;
 let env;
 
@@ -43,12 +45,25 @@ function checkout(versionDir, mod, branch) {
   git(tmp, 'clone', '-q', '-b', branch, path.join(tmp, 'origin', `${mod}.git`), path.join(tmp, versionDir, mod));
 }
 
-function run(args, extraEnv = {}) {
-  const r = spawnSync(process.execPath, [BIN, ...args], {
-    env: { ...env, NO_COLOR: '1', CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'), ...extraEnv },
-    encoding: 'utf8',
-  });
+function runEnv(extraEnv) {
+  return { ...env, NO_COLOR: '1', CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'), CC_HELPERS_MARKS: path.join(tmp, 'marks.json'), ...extraEnv };
+}
+
+function run(args, extraEnv = {}, { bin = BIN, cwd = tmp } = {}) {
+  const r = spawnSync(process.execPath, [bin, ...args], { env: runEnv(extraEnv), cwd, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
+}
+
+// Like run, but without blocking this process, which serves the fake GitHub API.
+function runAsync(args, extraEnv = {}) {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [BIN, ...args], { env: runEnv(extraEnv), cwd: tmp });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', d => { out += d; });
+    child.stderr.on('data', d => { err += d; });
+    child.on('close', code => resolve({ code, out, err }));
+  });
 }
 
 // Cells of a mod's row in the table.
@@ -62,7 +77,9 @@ before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-status-test-'));
   const gitconfig = path.join(tmp, 'gitconfig');
   fs.writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.com\n'
-    + '[commit]\n\tgpgSign = false\n[tag]\n\tgpgSign = false\n[init]\n\tdefaultBranch = main\n');
+    + '[commit]\n\tgpgSign = false\n[tag]\n\tgpgSign = false\n[init]\n\tdefaultBranch = main\n'
+    // Remotes on "GitHub" are served from the local origins.
+    + `[url "${path.join(tmp, 'origin')}/"]\n\tinsteadOf = https://github.com/Test/\n`);
   env = { ...process.env, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1' };
 
   // ModA: maintained on both versions, several kinds of unreleased commits on 1.20.
@@ -235,18 +252,131 @@ test('reports tags that differ from origin instead of failing', () => {
   assert.strictEqual((r.out.match(/local: tag/g) || []).length, 1);
 });
 
-test('ignores commits listed in the config', () => {
+test('cc-mark marks commits as needing a release or not', () => {
+  const modA = path.join(tmp, 'mc20-lts', 'ModA');
+  const fix = git(modA, 'log', '-1', '--format=%H', '--grep=Fix crash').trim();
+  const agents = git(modA, 'log', '-1', '--format=%H', '--grep=Add AGENTS').trim();
+
+  let r = run(['no-release', fix.slice(0, 7)], {}, { bin: MARK, cwd: modA });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(r.out, `Marked ${fix.slice(0, 9)} ModA: Fix crash as needing no release\n`);
+  r = run(['--no-fetch', '-v', 'ModA']);
+  assert.deepStrictEqual(row(r.out, 'ModA'), ['2', '↑2']);
+  assert.match(r.out, /Fix crash \(marked as no release\)/);
+
+  // Outside a checkout, it searches all mod checkouts.
+  r = run(['release', agents.slice(0, 10), '--reason', 'docs ship in the jar'], {}, { bin: MARK });
+  assert.strictEqual(r.code, 0, r.err);
+  r = run(['--no-fetch', '-v', 'ModA']);
+  assert.deepStrictEqual(row(r.out, 'ModA'), ['3', '↑3']);
+  assert.match(r.out, /Add AGENTS\.md \(marked as release\)/);
+  assert.match(run(['list'], {}, { bin: MARK }).out,
+    new RegExp(`no release  ${fix.slice(0, 9)}  ModA  Fix crash\nrelease     ${agents.slice(0, 9)}  ModA  Add AGENTS\\.md  \\(docs ship in the jar\\)\n`));
+
+  assert.strictEqual(run(['clear', fix, agents], {}, { bin: MARK }).code, 0);
+  assert.deepStrictEqual(row(run(['--no-fetch', 'ModA']).out, 'ModA'), ['3', '↑3']);
+  assert.strictEqual(run(['list'], {}, { bin: MARK }).out, 'No marks yet.\n');
+
+  r = run(['no-release', 'deadbeef'], {}, { bin: MARK });
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err, /Commit deadbeef not found/);
+});
+
+test('points to cc-mark when the config still has ignoreCommits', () => {
   const file = path.join(tmp, 'ignore.json');
   const config = JSON.parse(fs.readFileSync(path.join(tmp, 'cc-helpers.json'), 'utf8'));
-  const fix = git(path.join(tmp, 'mc20-lts', 'ModA'), 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
-  write(file, JSON.stringify({ ...config, ignoreCommits: [fix] }));
-  const r = run(['--no-fetch', '-v', 'ModA'], { CC_HELPERS_CONFIG: file });
-  assert.strictEqual(r.code, 0, r.err);
-  assert.deepStrictEqual(row(r.out, 'ModA'), ['2', '↑2']);
-  assert.match(r.out, new RegExp(`${fix}[0-9a-f]* Fix crash \\(ignored in the config\\)`));
+  write(file, JSON.stringify({ ...config, ignoreCommits: ['abcdef1'] }));
+  const r = run(['--no-fetch'], { CC_HELPERS_CONFIG: file });
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err, /"ignoreCommits" is replaced by cc-mark\. Run: cc-mark no-release abcdef1/);
+});
 
-  write(file, JSON.stringify({ ...config, ignoreCommits: ['abc'] }));
-  const bad = run(['--no-fetch'], { CC_HELPERS_CONFIG: file });
-  assert.strictEqual(bad.code, 1);
-  assert.match(bad.err, /"ignoreCommits" needs commit hashes of at least 7 characters, not "abc"/);
+test('only fetches the checkouts GitHub reports changes for', async () => {
+  // ModG lives on "GitHub", in its own version dirs.
+  const w = newMod('ModG');
+  git(w, 'checkout', '-q', '-b', 'master-1.20-lts');
+  commit(w, 'Initial', { 'gradle.properties': props('1.20.1', '1.0.0'), 'src/main/java/G.java': 'g' });
+  git(w, 'tag', '1.20.1-1.0.0');
+  git(w, 'checkout', '-q', '-b', 'master-1.21-lts');
+  commit(w, 'Port to 1.21', { 'gradle.properties': props('1.21.1', '2.0.0') });
+  git(w, 'tag', '1.21.1-2.0.0');
+  git(w, 'push', '-q', '--tags', 'origin', 'master-1.20-lts', 'master-1.21-lts');
+  for (const [dir, branch] of [['gh20', 'master-1.20-lts'], ['gh21', 'master-1.21-lts']]) {
+    git(tmp, 'clone', '-q', '-b', branch, 'https://github.com/Test/ModG.git', path.join(tmp, dir, 'ModG'));
+  }
+  write(path.join(tmp, 'gh21', '.upmerge-src-branch'), 'master-1.20-lts\n');
+  const config = path.join(tmp, 'gh.json');
+  write(config, JSON.stringify({ versions: [
+    { dir: path.join(tmp, 'gh20'), branch: 'master-1.20-lts' },
+    { dir: path.join(tmp, 'gh21'), branch: 'master-1.21-lts' },
+  ] }));
+  const pushFix = n => {
+    git(w, 'checkout', '-q', 'master-1.20-lts');
+    commit(w, `Fix G${n}`, { 'src/main/java/G.java': `g${n}` });
+    git(w, 'push', '-q', 'origin', 'master-1.20-lts');
+  };
+  // What the fake GitHub reports: the refs of the origin at the time of the snapshot.
+  const snapshot = () => {
+    const refs = git(path.join(tmp, 'origin', 'ModG.git'), 'for-each-ref', '--format=%(refname) %(objectname)')
+      .trim().split('\n').map(l => l.split(' '));
+    const nodes = prefix => refs.filter(([r]) => r.startsWith(prefix)).map(([r, oid]) => ({ name: r.slice(prefix.length), target: { oid } }));
+    return { heads: { nodes: nodes('refs/heads/') }, tags: { nodes: nodes('refs/tags/') } };
+  };
+
+  const requests = [];
+  let answer;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', d => { body += d; });
+    req.on('end', () => {
+      const { query } = JSON.parse(body);
+      requests.push({ auth: req.headers.authorization, query });
+      const { status, json } = answer(query);
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(json));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ghEnv = { CC_HELPERS_CONFIG: config, GH_TOKEN: 'secret', CC_HELPERS_GITHUB_API: `http://127.0.0.1:${server.address().port}/graphql` };
+  const reply = refs => () => ({ status: 200, json: { data: { r0: refs } } });
+  try {
+    pushFix(1);
+    answer = reply(snapshot());
+    let r = await runAsync(['-v', 'ModG'], ghEnv);
+    assert.strictEqual(r.code, 0, r.err);
+    assert.deepStrictEqual(row(r.out, 'ModG'), ['1', '↑1']);
+    assert.match(r.err, /Fetching 2 of 2 checkouts/);
+    assert.strictEqual(requests[0].auth, 'bearer secret');
+    assert.match(requests[0].query, /r0: repository\(owner: "Test", name: "ModG"\)/);
+
+    // GitHub says nothing changed, so nothing is fetched.
+    const stale = snapshot();
+    pushFix(2);
+    answer = reply(stale);
+    r = await runAsync(['-v', 'ModG'], ghEnv);
+    assert.deepStrictEqual(row(r.out, 'ModG'), ['1', '↑1']);
+    assert.match(r.err, /Fetching 0 of 2 checkouts/);
+
+    // --fetch-all doesn't ask.
+    r = await runAsync(['--fetch-all', 'ModG'], ghEnv);
+    assert.deepStrictEqual(row(r.out, 'ModG'), ['2', '↑2']);
+    assert.strictEqual(requests.length, 2);
+
+    // When GitHub fails, everything is fetched.
+    pushFix(3);
+    answer = () => ({ status: 502, json: {} });
+    r = await runAsync(['ModG'], ghEnv);
+    assert.match(r.err, /Couldn't ask GitHub what changed \(GitHub answered 502\), so fetching every checkout\./);
+    assert.deepStrictEqual(row(r.out, 'ModG'), ['3', '↑3']);
+
+    // A new tag on origin is fetched too.
+    git(w, 'tag', '1.20.1-1.0.1');
+    git(w, 'push', '-q', 'origin', '1.20.1-1.0.1');
+    answer = reply(snapshot());
+    r = await runAsync(['-v', 'ModG'], ghEnv);
+    assert.match(r.err, /Fetching 2 of 2 checkouts/);
+    assert.ok(git(path.join(tmp, 'gh20', 'ModG'), 'tag', '-l', '1.20.1-1.0.1').trim());
+  } finally {
+    server.close();
+  }
 });
