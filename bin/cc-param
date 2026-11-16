@@ -48,6 +48,7 @@ case $name in
         id=$(prop mod_id)
         if [[ ! -z $id ]]; then
             echo $id
+            exit 0
         fi
         
 		modpropfile="src/main/resources/mcmod.info"
