@@ -350,7 +350,7 @@ async function editChangelog(ctx, props, since) {
       srcBranch: ctx.lower ? ctx.src : null,
       branch: version.branch,
       header,
-      devOnlyPaths: config.devOnlyPaths,
+      filter: config.commitFilter,
     }));
   }
   for (;;) {
@@ -410,7 +410,7 @@ async function checkDependencies(ctx) {
         continue;
       }
       const cell = await cellStatus({
-        repoDir: path.join(version.dir, other), version, lowerBranches: [], fetch: true, devOnlyPaths: config.devOnlyPaths,
+        repoDir: path.join(version.dir, other), version, lowerBranches: [], fetch: true, filter: config.commitFilter,
       }).catch(() => null);
       const n = cell && cell.unreleased ? cell.unreleased.userFacing.length : 0;
       if (n) warnings.push(`${other} has ${plural(n, 'unreleased change')} on ${version.name}`);
@@ -507,7 +507,7 @@ async function releaseVersion(ctx) {
       clearState(ctx);
       return;
     }
-    const pending = partition(await listCommits(repo, [`refs/tags/${since}..HEAD`]), ctx.config.devOnlyPaths);
+    const pending = partition(await listCommits(repo, [`refs/tags/${since}..HEAD`]), ctx.config.commitFilter);
     if (!pending.userFacing.length) {
       await pushUpmerge(ctx, `nothing to release since ${since}`);
       clearState(ctx);
@@ -572,7 +572,7 @@ async function main() {
   for (const v of present) {
     const repo = path.join(v.dir, mod);
     const lowerBranches = present.filter(x => x.index < v.index).map(x => x.branch);
-    cells[v.index] = await cellStatus({ repoDir: repo, version: v, lowerBranches, fetch: true, devOnlyPaths: config.devOnlyPaths })
+    cells[v.index] = await cellStatus({ repoDir: repo, version: v, lowerBranches, fetch: true, filter: config.commitFilter })
       .catch(e => ({ error: e.message }));
     states[v.index] = loadState(repo);
   }
