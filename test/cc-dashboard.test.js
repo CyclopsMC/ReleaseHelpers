@@ -233,13 +233,16 @@ test('starts release chains and tools in a terminal', async () => {
   assert.strictEqual((await post('/api/terminal', { mod: 'ModA', version: '1.21-lts' })).status, 200);
   assert.strictEqual((await post('/api/ide', { mod: 'ModB', version: '1.21-lts' })).status, 200);
   assert.strictEqual((await post('/api/terminal', { mod: 'ModB', version: '1.20-lts' })).status, 400);
+  // The tools are started, but may not have written their log yet.
+  const logLines = name => (fs.existsSync(sb.path(name)) ? sb.read(sb.path(name)).trim().split('\n') : []);
+  await waitFor(() => logLines('fake-terminal.log').length === 3 && logLines('fake-ide.log').length === 1, 'the terminal and IDE to start');
   // The chain starts in the checkout of its first version.
-  assert.deepStrictEqual(sb.read(sb.path('fake-terminal.log')).trim().split('\n'), [
+  assert.deepStrictEqual(logLines('fake-terminal.log'), [
     `cd '${dir20}' && '${chainBin}' 'ModA'`,
     `cd '${dir20}' && '${chainBin}' --rehearse --confirm 'ModA'`,
     `cd '${sb.path('mc21-lts', 'ModA')}'`,
   ]);
-  assert.strictEqual(sb.read(sb.path('fake-ide.log')).trim(), sb.path('mc21-lts', 'ModB'));
+  assert.deepStrictEqual(logLines('fake-ide.log'), [sb.path('mc21-lts', 'ModB')]);
 });
 
 test('shows a running release chain and what it waits for', async () => {
