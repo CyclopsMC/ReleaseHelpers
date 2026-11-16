@@ -84,21 +84,14 @@ To do, by lowest MC version:
 - `new`: no release on this MC version yet.
 - `!`: the local checkout needs attention: wrong branch, uncommitted changes, unpushed commits or a merge in progress.
 - `-`: no checkout for this version. `?`: error, see the bottom of the output.
+- Mods without any release on any version (like the compat mods) are only upmerged: their cells only show `↑N`, and they are listed under "Upmerge only".
 
 The "To do" list groups mods by the lowest MC version that needs work, which is where a release chain for that mod starts.
-
-Only commits that matter to players are counted:
-- `Bump mod version` commits are ignored.
-- `Bump compat version` commits count only if their message lists changelog entries.
-- Commits that only touch dev files (CI, tests, game tests, Gradle files, `*.md`, changelogs, ...) are ignored.
-- Translation commits count, but are marked with `t`.
 
 Options:
 - `cc-status IntegratedDynamics EvilCraft`: only these mods.
 - `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
 - `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
-
-`cc-status` only fetches `origin`; it never changes working trees or local branches.
 
 ## Changelog drafts
 
@@ -174,7 +167,7 @@ Options:
 - `--rehearse`: a dry run with the real tools, see below.
 - `--no-review`, `--no-build`: skip the Claude review or the build.
 
-Versions without a release on their MC version yet (e.g. a new MC version) only get the upmerge pushed, and so do versions where nothing user-facing changed. At the end, it prints a summary per version.
+Versions without a release on their MC version yet (e.g. a new MC version) only get the upmerge pushed, and so do versions where nothing user-facing changed, and mods without any release (like the compat mods). At the end, it prints a summary per version.
 
 You can stop at any prompt (or with Ctrl-C) and run the same command again to continue: the upmerge, a passed build, a review and your edited draft are kept.
 
@@ -203,10 +196,3 @@ You can run chains for different mods at the same time, each in its own terminal
 - After a long step, a chain rings the terminal bell and shows a macOS notification when it needs you.
 - If mod B depends on mod A, release A first: step 7 warns when A still has unreleased changes or a running chain.
 
-## Tests
-
-```bash
-node --test test/*.test.js
-```
-
-On macOS, the tests need GNU sed as `gsed` (`brew install gnu-sed`), like `cc-bump`.

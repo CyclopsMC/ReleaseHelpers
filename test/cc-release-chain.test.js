@@ -31,7 +31,7 @@ afterEach(() => sb && sb.cleanup());
 
 // ModA on 1.20 and 1.21 (both released), with an unreleased fix on 1.20.
 // `conflict`: 1.21 changed the same line. `withNew`: a 26 version without releases yet.
-function setup({ conflict = false, withNew = false } = {}) {
+function setup({ conflict = false, withNew = false, releases = true } = {}) {
   sb = createSandbox('cc-release-chain-test-');
   const w = sb.newMod('ModA');
   sb.git(w, 'checkout', '-q', '-b', 'master-1.20-lts');
@@ -42,13 +42,13 @@ function setup({ conflict = false, withNew = false } = {}) {
     'src/main/java/A.java': 'a\n',
     'resources/changelog/1.20.1-1.0.0.txt': `${HEADER}Initial 1.20.1 release\n`,
   });
-  sb.git(w, 'tag', '1.20.1-1.0.0');
+  if (releases) sb.git(w, 'tag', '1.20.1-1.0.0');
   sb.git(w, 'checkout', '-q', '-b', 'master-1.21-lts');
   sb.commit(w, 'Port to 1.21', {
     'gradle.properties': props('1.21.1', '2.0.0'),
     'resources/changelog/1.21.1-2.0.0.txt': `${HEADER}Initial 1.21.1 release\n`,
   });
-  sb.git(w, 'tag', '1.21.1-2.0.0');
+  if (releases) sb.git(w, 'tag', '1.21.1-2.0.0');
   if (conflict) sb.commit(w, 'Change A on 1.21', { 'src/main/java/A.java': 'a-1.21\n' });
   const branches = ['master-1.20-lts', 'master-1.21-lts'];
   if (withNew) {
@@ -294,6 +294,32 @@ test('removes a rehearsal that ends before doing anything', () => {
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.out, /Nothing to release for ModA\./);
   assert.deepStrictEqual(rehearsals(), []);
+});
+
+test('only upmerges a mod without releases, like a compat mod', () => {
+  setup({ releases: false });
+  // Start, push the 1.21 upmerge.
+  const r = chain(['ModA'], 'y\n\n');
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /1\.21-lts {2}only upmerged \(no releases\), 1 to upmerge\n/);
+  assert.deepStrictEqual(originTags(), []);
+  assert.strictEqual(originHead('master-1.21-lts'), localHead('mc21-lts'));
+  assert.match(sb.git(sb.path('mc21-lts', 'ModA'), 'log', '--format=%s', '-3'), /^Merge .*\nFix crash\n/);
+  assert.ok(!log().includes('edit '), 'no changelog to edit');
+  assert.ok(!r.out.includes('== ModA 1.20-lts'), 'nothing to do on the lowest version');
+  assert.match(r.out, /1\.21-lts {2}upmerge pushed \(this mod is only upmerged, it has no releases\), build ok, review: no changes\n/);
+});
+
+test('refuses to start when a release tag differs from origin', () => {
+  setup();
+  // The 1.20 release tag is recreated on origin, at the fix.
+  const w = sb.path('work', 'ModA');
+  sb.git(w, 'tag', '-f', '1.20.1-1.0.0', 'master-1.20-lts');
+  sb.git(w, 'push', '-q', '-f', 'origin', 'refs/tags/1.20.1-1.0.0');
+  const r = chain(['ModA'], 'y\n');
+  assert.strictEqual(r.code, 1);
+  assert.match(r.out, /tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
+  assert.match(r.err, /Fix the problems above first \(1\.20-lts, 1\.21-lts\)/);
 });
 
 test('refuses to run twice for the same mod', () => {

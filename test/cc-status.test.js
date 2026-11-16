@@ -105,7 +105,19 @@ before(() => {
   commit(w, 'Initial', { 'gradle.properties': props('1.21.1', '0.1.0'), 'src/main/java/D.java': 'd' });
   git(w, 'push', '-q', 'origin', 'master-1.21-lts');
 
+  // ModE-Compat: never released anywhere, like the compat mods, with a fix on 1.20 to upmerge.
+  w = newMod('ModE-Compat');
+  git(w, 'checkout', '-q', '-b', 'master-1.20-lts');
+  commit(w, 'Initial', { 'gradle.properties': props('1.20.1', '1.0.0'), 'src/main/java/E.java': 'e' });
+  git(w, 'checkout', '-q', '-b', 'master-1.21-lts');
+  commit(w, 'Port to 1.21', { 'gradle.properties': props('1.21.1', '1.0.0') });
+  git(w, 'checkout', '-q', 'master-1.20-lts');
+  commit(w, 'Fix compat', { 'src/main/java/E.java': 'e2' });
+  git(w, 'push', '-q', 'origin', 'master-1.20-lts', 'master-1.21-lts');
+
   checkout('mc20-lts', 'ModA', 'master-1.20-lts');
+  checkout('mc20-lts', 'ModE-Compat', 'master-1.20-lts');
+  checkout('mc21-lts', 'ModE-Compat', 'master-1.21-lts');
   checkout('mc20-lts', 'ModC', 'master-1.20-lts');
   for (const m of ['ModA', 'ModB', 'ModC', 'ModD']) checkout('mc21-lts', m, 'master-1.21-lts');
   write(path.join(tmp, 'mc21-lts', '.upmerge-src-branch'), 'master-1.20-lts\n');
@@ -128,7 +140,7 @@ after(() => {
 });
 
 test('lists mods and versions for completion', () => {
-  assert.strictEqual(run(['--list-mods']).out, 'ModA\nModB\nModC\nModD\n');
+  assert.strictEqual(run(['--list-mods']).out, 'ModA\nModB\nModC\nModD\nModE-Compat\n');
   assert.strictEqual(run(['--list-versions']).out, '1.20-lts\n1.21-lts\n');
 });
 
@@ -139,7 +151,9 @@ test('shows the status table', () => {
   assert.deepStrictEqual(row(r.out, 'ModA'), ['3', '↑3']);
   assert.deepStrictEqual(row(r.out, 'ModB'), ['-', '1t']);
   assert.deepStrictEqual(row(r.out, 'ModC'), ['.', '.!']);
-  assert.deepStrictEqual(row(r.out, 'ModD'), ['-', 'new']);
+  // Never released anywhere: only upmerged, so no "new".
+  assert.deepStrictEqual(row(r.out, 'ModD'), ['-', '.']);
+  assert.deepStrictEqual(row(r.out, 'ModE-Compat'), ['.', '↑1']);
   assert.ok(!r.out.includes('OtherRepo'));
 });
 
@@ -147,6 +161,8 @@ test('groups what needs doing by lowest MC version', () => {
   const { out } = run(['--no-fetch']);
   assert.match(out, /To do, by lowest MC version:\n1\.20-lts: ModA\n/);
   assert.match(out, /Only translations:\n1\.21-lts: ModB\n/);
+  assert.match(out, /Upmerge only:\n1\.21-lts: ModE-Compat\n/);
+  assert.ok(!out.includes('ModD\n'), 'nothing to do for ModD');
   assert.ok(!/: .*ModC/.test(out.split('To do')[1]));
 });
 
@@ -192,4 +208,23 @@ test('fetches new commits unless --no-fetch is given', () => {
   const r = run(['ModC']);
   assert.strictEqual(r.code, 0, r.err);
   assert.deepStrictEqual(row(r.out, 'ModC'), ['1', '↑1!']);
+});
+
+test('marks mods without releases as upmerge only in verbose output', () => {
+  const { out } = run(['--no-fetch', '-v', 'ModE-Compat']);
+  assert.match(out, /1\.21-lts \(upmerge only\)\n {4}to upmerge:\n.* Fix compat\n/);
+});
+
+test('reports tags that differ from origin instead of failing', () => {
+  // The 1.20 release tag of ModC is recreated on origin, at a later commit.
+  const w = path.join(tmp, 'work', 'ModC');
+  git(w, 'checkout', '-q', 'master-1.20-lts');
+  git(w, 'tag', '-f', '1.20.1-1.0.0');
+  git(w, 'push', '-q', '-f', 'origin', 'refs/tags/1.20.1-1.0.0');
+
+  const r = run(['-v', 'ModC']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(!r.out.includes('Errors:'), r.out);
+  assert.deepStrictEqual(row(r.out, 'ModC'), ['1!', '↑1!']);
+  assert.match(r.out, /local: tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
 });
