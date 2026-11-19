@@ -1,5 +1,6 @@
 'use strict';
-// End-to-end tests of cc-status against throwaway repos with a local "origin".
+// Tests of the release status of mods (lib/status.js, used by cc-dashboard and cc-release-chain)
+// against throwaway repos with a local "origin".
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -7,9 +8,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
-const { execFileSync, spawn, spawnSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
+const { loadConfig } = require('../bin/lib/config');
+const {
+  discoverMods, checkVersionDirs, computeStatus, planFetches, isUpmergeOnly, modWork, cellText,
+} = require('../bin/lib/status');
 
-const BIN = path.join(__dirname, '..', 'bin', 'cc-status');
 const MARK = path.join(__dirname, '..', 'bin', 'cc-mark');
 let tmp;
 let env;
@@ -45,42 +49,38 @@ function checkout(versionDir, mod, branch) {
   git(tmp, 'clone', '-q', '-b', branch, path.join(tmp, 'origin', `${mod}.git`), path.join(tmp, versionDir, mod));
 }
 
-function runEnv(extraEnv) {
-  return { ...env, NO_COLOR: '1', CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'), CC_HELPERS_MARKS: path.join(tmp, 'marks.json'), ...extraEnv };
+// The status as cc-dashboard computes it. Marks are read along with the config, like it does.
+async function status({ fetch = false, mods } = {}) {
+  const config = loadConfig();
+  const found = discoverMods(config);
+  const cells = await computeStatus(config, { ...found, mods: mods || found.mods }, { fetch });
+  const texts = Object.fromEntries(Object.entries(cells).map(([m, cs]) => [m, cs.map(c => cellText(c, isUpmergeOnly(cs)))]));
+  return { config, found, cells, texts };
 }
 
-function run(args, extraEnv = {}, { bin = BIN, cwd = tmp } = {}) {
-  const r = spawnSync(process.execPath, [bin, ...args], { env: runEnv(extraEnv), cwd, encoding: 'utf8' });
+const subjects = commits => commits.map(c => c.subject);
+
+function mark(args, cwd = tmp) {
+  const r = spawnSync(process.execPath, [MARK, ...args], { cwd, env: process.env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
-// Like run, but without blocking this process, which serves the fake GitHub API.
-function runAsync(args, extraEnv = {}) {
-  return new Promise(resolve => {
-    const child = spawn(process.execPath, [BIN, ...args], { env: runEnv(extraEnv), cwd: tmp });
-    let out = '';
-    let err = '';
-    child.stdout.on('data', d => { out += d; });
-    child.stderr.on('data', d => { err += d; });
-    child.on('close', code => resolve({ code, out, err }));
-  });
-}
-
-// Cells of a mod's row in the table.
-function row(out, mod) {
-  const line = out.split('\n').find(l => l.startsWith(`${mod} `));
-  assert.ok(line, `no row for ${mod} in:\n${out}`);
-  return line.trim().split(/\s+/).slice(1);
-}
-
 before(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-status-test-'));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-helpers-status-test-'));
   const gitconfig = path.join(tmp, 'gitconfig');
   fs.writeFileSync(gitconfig, '[user]\n\tname = Test\n\temail = test@example.com\n'
     + '[commit]\n\tgpgSign = false\n[tag]\n\tgpgSign = false\n[init]\n\tdefaultBranch = main\n'
     // Remotes on "GitHub" are served from the local origins.
     + `[url "${path.join(tmp, 'origin')}/"]\n\tinsteadOf = https://github.com/Test/\n`);
   env = { ...process.env, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1' };
+  // The status code runs in this process, so it gets the sandbox environment too.
+  Object.assign(process.env, env, {
+    CC_HELPERS_CONFIG: path.join(tmp, 'cc-helpers.json'),
+    CC_HELPERS_MARKS: path.join(tmp, 'marks.json'),
+    CC_HELPERS_STATE_DIR: path.join(tmp, 'state'),
+  });
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
 
   // ModA: maintained on both versions, several kinds of unreleased commits on 1.20.
   let w = newMod('ModA');
@@ -158,113 +158,111 @@ after(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('lists mods and versions for completion', () => {
-  assert.strictEqual(run(['--list-mods']).out, 'ModA\nModB\nModC\nModD\nModE-Compat\n');
-  assert.strictEqual(run(['--list-versions']).out, '1.20-lts\n1.21-lts\n');
+test('finds the mod checkouts, and skips copies and other repos', () => {
+  const found = discoverMods(loadConfig());
+  assert.deepStrictEqual(found.mods, ['ModA', 'ModB', 'ModC', 'ModD', 'ModE-Compat']);
+  assert.deepStrictEqual(found.skipped, [{ version: '1.20-lts', name: 'ModA-tmp', origin: 'ModA' }]);
 });
 
-test('shows the status table', () => {
-  const r = run(['--no-fetch']);
-  assert.strictEqual(r.code, 0, r.err);
-  assert.strictEqual(r.err, 'Skipped 1.20-lts/ModA-tmp: it is a checkout of ModA.\n');
-  assert.ok(!r.out.includes('ModA-tmp'));
-  assert.deepStrictEqual(row(r.out, 'ModA'), ['3', '↑3']);
-  assert.deepStrictEqual(row(r.out, 'ModB'), ['-', '1t']);
-  assert.deepStrictEqual(row(r.out, 'ModC'), ['.', '.!']);
-  // Never released anywhere: only upmerged, so no "new".
-  assert.deepStrictEqual(row(r.out, 'ModD'), ['-', '.']);
-  assert.deepStrictEqual(row(r.out, 'ModE-Compat'), ['.', '↑1']);
-  assert.ok(!r.out.includes('OtherRepo'));
+test('computes the status of every cell', async () => {
+  const { texts } = await status();
+  assert.deepStrictEqual(texts, {
+    ModA: ['3', '↑3'],
+    ModB: ['-', '1t'],
+    ModC: ['.', '.!'],
+    // Never released anywhere: only upmerged, so no "new".
+    ModD: ['-', '.'],
+    'ModE-Compat': ['.', '↑1'],
+  });
 });
 
-test('groups what needs doing by lowest MC version', () => {
-  const { out } = run(['--no-fetch']);
-  assert.match(out, /To do, by lowest MC version:\n1\.20-lts: ModA\n/);
-  assert.match(out, /Only translations:\n1\.21-lts: ModB\n/);
-  assert.match(out, /Upmerge only:\n1\.21-lts: ModE-Compat\n/);
-  assert.ok(!out.includes('ModD\n'), 'nothing to do for ModD');
-  assert.ok(!/: .*ModC/.test(out.split('To do')[1]));
+test('groups what needs doing by lowest MC version', async () => {
+  const { cells } = await status();
+  assert.deepStrictEqual(modWork(cells.ModA), { start: 0, group: 'todo' });
+  assert.deepStrictEqual(modWork(cells.ModB), { start: 1, group: 'translations' });
+  assert.deepStrictEqual(modWork(cells['ModE-Compat']), { start: 1, group: 'upmerge' });
+  assert.deepStrictEqual(modWork(cells.ModC), { start: -1, group: null });
+  assert.deepStrictEqual(modWork(cells.ModD), { start: -1, group: null });
 });
 
-test('verbose output explains each cell', () => {
-  const { out } = run(['--no-fetch', '-v', 'moda', 'ModC']);
-  assert.ok(!out.includes('ModB'));
-  assert.match(out, /unreleased:\n.* Bump compat version\n.* New translations\n.* Fix crash\n/);
-  assert.match(out, /Add AGENTS\.md \(only dev files\)/);
-  assert.match(out, /Bump compat version \(compat bump without changelog entries\)/);
-  assert.match(out, /to upmerge:\n.* Bump compat version\n/);
-  assert.match(out, /local: uncommitted changes/);
-});
-
-test('rejects unknown mods', () => {
-  const r = run(['--no-fetch', 'Nope']);
-  assert.strictEqual(r.code, 1);
-  assert.match(r.err, /Unknown mod Nope/);
+test('explains each cell: the commits, the ones the filter dropped, and local problems', async () => {
+  const { cells } = await status();
+  const [a20, a21] = cells.ModA;
+  assert.strictEqual(a20.lastRelease, '1.20.1-1.0.0');
+  assert.deepStrictEqual(subjects(a20.unreleased.userFacing), ['Bump compat version', 'New translations', 'Fix crash']);
+  assert.deepStrictEqual(a20.unreleased.dropped.map(c => [c.subject, c.reason]), [
+    ['Bump compat version', 'compat bump without changelog entries'],
+    ['Add AGENTS.md', 'only dev files'],
+  ]);
+  assert.deepStrictEqual(subjects(a21.pending.userFacing), ['Bump compat version', 'New translations', 'Fix crash']);
+  assert.deepStrictEqual(cells.ModC[1].local, ['uncommitted changes']);
+  assert.ok(isUpmergeOnly(cells['ModE-Compat']));
+  assert.ok(!isUpmergeOnly(cells.ModA));
 });
 
 test('warns about a wrong .upmerge-src-branch', () => {
   const file = path.join(tmp, 'mc21-lts', '.upmerge-src-branch');
   fs.writeFileSync(file, 'master-1.19-lts\n');
   try {
-    assert.match(run(['--no-fetch', 'ModD']).err, /says master-1\.19-lts, but the version before it in the config is master-1\.20-lts/);
+    assert.deepStrictEqual(checkVersionDirs(loadConfig()),
+      [`${file} says master-1.19-lts, but the version before it in the config is master-1.20-lts`]);
   } finally {
     fs.writeFileSync(file, 'master-1.20-lts\n');
   }
 });
 
-test('reports a missing config', () => {
-  const r = run(['--no-fetch'], { CC_HELPERS_CONFIG: path.join(tmp, 'nope.json') });
-  assert.strictEqual(r.code, 1);
-  assert.match(r.err, /Can't read .*nope\.json/);
+test('reports a missing config, and points to cc-mark when it still has ignoreCommits', () => {
+  const file = process.env.CC_HELPERS_CONFIG;
+  try {
+    process.env.CC_HELPERS_CONFIG = path.join(tmp, 'nope.json');
+    assert.throws(() => loadConfig(), /Can't read .*nope\.json/);
+    process.env.CC_HELPERS_CONFIG = path.join(tmp, 'ignore.json');
+    write(process.env.CC_HELPERS_CONFIG, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ignoreCommits: ['abcdef1'] }));
+    assert.throws(() => loadConfig(), /"ignoreCommits" is replaced by cc-mark\. Run: cc-mark no-release abcdef1/);
+  } finally {
+    process.env.CC_HELPERS_CONFIG = file;
+  }
 });
 
-test('fetches new commits unless --no-fetch is given', () => {
+test('fetches new commits only when asked', async () => {
   const w = path.join(tmp, 'work', 'ModC');
   git(w, 'checkout', '-q', 'master-1.20-lts');
   commit(w, 'Fix another crash', { 'src/main/java/C.java': 'c2' });
   git(w, 'push', '-q', 'origin', 'master-1.20-lts');
 
-  assert.deepStrictEqual(row(run(['--no-fetch', 'ModC']).out, 'ModC'), ['.', '.!']);
-  const r = run(['ModC']);
-  assert.strictEqual(r.code, 0, r.err);
-  assert.deepStrictEqual(row(r.out, 'ModC'), ['1', '↑1!']);
+  assert.deepStrictEqual((await status({ mods: ['ModC'] })).texts.ModC, ['.', '.!']);
+  assert.deepStrictEqual((await status({ mods: ['ModC'], fetch: true })).texts.ModC, ['1', '↑1!']);
 });
 
-test('marks mods without releases as upmerge only in verbose output', () => {
-  const { out } = run(['--no-fetch', '-v', 'ModE-Compat']);
-  assert.match(out, /1\.21-lts \(upmerge only\)\n {4}to upmerge:\n.* Fix compat\n/);
-});
-
-test('reports tags that differ from origin instead of failing', () => {
+test('reports tags that differ from origin instead of failing', async () => {
   // The 1.20 release tag of ModC is recreated on origin, at a later commit.
   const w = path.join(tmp, 'work', 'ModC');
   git(w, 'checkout', '-q', 'master-1.20-lts');
   git(w, 'tag', '-f', '1.20.1-1.0.0');
   git(w, 'push', '-q', '-f', 'origin', 'refs/tags/1.20.1-1.0.0');
 
-  const r = run(['-v', 'ModC']);
-  assert.strictEqual(r.code, 0, r.out + r.err);
-  assert.ok(!r.out.includes('Errors:'), r.out);
-  assert.deepStrictEqual(row(r.out, 'ModC'), ['1!', '↑1!']);
-  assert.match(r.out, /local: tag 1\.20\.1-1\.0\.0 differs from origin \(to use the ones from origin: git fetch --tags --force origin\)/);
+  const { cells, texts } = await status({ mods: ['ModC'], fetch: true });
+  assert.ok(!cells.ModC.some(c => c.error), JSON.stringify(cells.ModC));
+  assert.deepStrictEqual(texts.ModC, ['1!', '↑1!']);
+  assert.deepStrictEqual(cells.ModC[0].local, ['tag 1.20.1-1.0.0 differs from origin (to use the ones from origin: git fetch --tags --force origin)']);
   // In the 1.21 checkout, that tag isn't the last release, so it is only noted.
-  assert.match(r.out, /1\.21-lts \(last release 1\.21\.1-2\.0\.0\)\n(.*\n)*? {4}note: older tag 1\.20\.1-1\.0\.0 differs from origin, which doesn't affect this status/);
-  assert.strictEqual((r.out.match(/local: tag/g) || []).length, 1);
+  assert.deepStrictEqual(cells.ModC[1].otherDifferingTags, ['1.20.1-1.0.0']);
+  assert.ok(!cells.ModC[1].local.some(l => /tag/.test(l)));
 });
 
-test('cc-mark marks commits per MC version, or for all of them', () => {
+test('cc-mark marks commits per MC version, or for all of them', async () => {
   const modA = path.join(tmp, 'mc20-lts', 'ModA');
   const fix = git(modA, 'log', '-1', '--format=%H', '--grep=Fix crash').trim();
   const agents = git(modA, 'log', '-1', '--format=%H', '--grep=Add AGENTS').trim();
-  const mark = (args, cwd = tmp) => run(args, {}, { bin: MARK, cwd });
-  const cells = () => row(run(['--no-fetch', 'ModA']).out, 'ModA');
+  const cellsOfA = async () => (await status({ mods: ['ModA'] })).texts.ModA;
 
   // In a checkout, a mark is for its version: 1.21 still has the fix to upmerge.
   let r = mark(['no-release', fix.slice(0, 7)], modA);
   assert.strictEqual(r.code, 0, r.err);
   assert.strictEqual(r.out, `Marked ${fix.slice(0, 9)} ModA: Fix crash as needing no release on 1.20-lts\n`);
-  assert.deepStrictEqual(cells(), ['2', '↑3']);
-  assert.match(run(['--no-fetch', '-v', 'ModA']).out, /Fix crash \(marked as no release on this version\)/);
+  assert.deepStrictEqual(await cellsOfA(), ['2', '↑3']);
+  const dropped = (await status({ mods: ['ModA'] })).cells.ModA[0].unreleased.dropped.find(c => c.hash === fix);
+  assert.deepStrictEqual([dropped.reason, dropped.marked], ['marked as no release on this version', 'master-1.20-lts']);
 
   // Elsewhere, you say which versions.
   r = mark(['no-release', fix]);
@@ -272,12 +270,11 @@ test('cc-mark marks commits per MC version, or for all of them', () => {
   assert.match(r.err, /Say which MC versions this mark is for: --version <version> .*, or --all-versions\. Versions: 1\.20-lts, 1\.21-lts/);
   assert.match(mark(['no-release', fix, '--version', '1.19']).err, /Unknown version 1\.19/);
   assert.strictEqual(mark(['no-release', fix, '--version', '1.21-lts']).code, 0);
-  assert.deepStrictEqual(cells(), ['2', '↑2']);
+  assert.deepStrictEqual(await cellsOfA(), ['2', '↑2']);
   r = mark(['release', agents.slice(0, 10), '--all-versions', '--reason', 'docs ship in the jar']);
   assert.strictEqual(r.code, 0, r.err);
   assert.match(r.out, /as needing a release on all versions\n$/);
-  assert.deepStrictEqual(cells(), ['3', '↑3']);
-  assert.match(run(['--no-fetch', '-v', 'ModA']).out, /Add AGENTS\.md \(marked as release\)/);
+  assert.deepStrictEqual(await cellsOfA(), ['3', '↑3']);
   assert.deepStrictEqual(mark(['list']).out.split('\n').filter(Boolean).map(l => l.split(/ {2,}/).slice(0, 3)), [
     ['no release', '1.20-lts', fix.slice(0, 9)],
     ['no release', '1.21-lts', fix.slice(0, 9)],
@@ -286,36 +283,28 @@ test('cc-mark marks commits per MC version, or for all of them', () => {
 
   // Clearing one version, then everything.
   assert.strictEqual(mark(['clear', fix, '--version', '1.20-lts']).code, 0);
-  assert.deepStrictEqual(cells(), ['4', '↑3']);
+  assert.deepStrictEqual(await cellsOfA(), ['4', '↑3']);
   assert.strictEqual(mark(['clear', fix, agents]).code, 0);
-  assert.deepStrictEqual(cells(), ['3', '↑3']);
+  assert.deepStrictEqual(await cellsOfA(), ['3', '↑3']);
   assert.strictEqual(mark(['list']).out, 'No marks yet.\n');
 
   r = mark(['no-release', 'deadbeef', '--all-versions']);
   assert.strictEqual(r.code, 1);
   assert.match(r.err, /Commit deadbeef not found/);
+  assert.strictEqual(mark(['--list-versions']).out, '1.20-lts\n1.21-lts\n');
 });
 
-test('reads marks of the first format as marks for all versions', () => {
+test('reads marks of the first format as marks for all versions', async () => {
   const fix = git(path.join(tmp, 'mc20-lts', 'ModA'), 'log', '-1', '--format=%H', '--grep=Fix crash').trim();
   write(path.join(tmp, 'marks.json'), JSON.stringify({ commits: { [fix]: { release: false, subject: 'Fix crash', mod: 'ModA', date: '2026-11-16' } } }));
   try {
-    assert.deepStrictEqual(row(run(['--no-fetch', 'ModA']).out, 'ModA'), ['2', '↑2']);
+    assert.deepStrictEqual((await status({ mods: ['ModA'] })).texts.ModA, ['2', '↑2']);
   } finally {
     fs.rmSync(path.join(tmp, 'marks.json'));
   }
 });
 
-test('points to cc-mark when the config still has ignoreCommits', () => {
-  const file = path.join(tmp, 'ignore.json');
-  const config = JSON.parse(fs.readFileSync(path.join(tmp, 'cc-helpers.json'), 'utf8'));
-  write(file, JSON.stringify({ ...config, ignoreCommits: ['abcdef1'] }));
-  const r = run(['--no-fetch'], { CC_HELPERS_CONFIG: file });
-  assert.strictEqual(r.code, 1);
-  assert.match(r.err, /"ignoreCommits" is replaced by cc-mark\. Run: cc-mark no-release abcdef1/);
-});
-
-test('only fetches the checkouts GitHub reports changes for', async () => {
+test('asks GitHub which checkouts changed, and only fetches those', async () => {
   // ModG lives on "GitHub", in its own version dirs.
   const w = newMod('ModG');
   git(w, 'checkout', '-q', '-b', 'master-1.20-lts');
@@ -329,8 +318,8 @@ test('only fetches the checkouts GitHub reports changes for', async () => {
     git(tmp, 'clone', '-q', '-b', branch, 'https://github.com/Test/ModG.git', path.join(tmp, dir, 'ModG'));
   }
   write(path.join(tmp, 'gh21', '.upmerge-src-branch'), 'master-1.20-lts\n');
-  const config = path.join(tmp, 'gh.json');
-  write(config, JSON.stringify({ versions: [
+  const configFile = path.join(tmp, 'gh.json');
+  write(configFile, JSON.stringify({ versions: [
     { dir: path.join(tmp, 'gh20'), branch: 'master-1.20-lts' },
     { dir: path.join(tmp, 'gh21'), branch: 'master-1.21-lts' },
   ] }));
@@ -355,21 +344,30 @@ test('only fetches the checkouts GitHub reports changes for', async () => {
     req.on('end', () => {
       const { query } = JSON.parse(body);
       requests.push({ auth: req.headers.authorization, query });
-      const { status, json } = answer(query);
-      res.writeHead(status, { 'Content-Type': 'application/json' });
+      const { status: code, json } = answer(query);
+      res.writeHead(code, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(json));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const ghEnv = { CC_HELPERS_CONFIG: config, GH_TOKEN: 'secret', CC_HELPERS_GITHUB_API: `http://127.0.0.1:${server.address().port}/graphql` };
+  const saved = { config: process.env.CC_HELPERS_CONFIG };
+  Object.assign(process.env, { CC_HELPERS_CONFIG: configFile, GH_TOKEN: 'secret', CC_HELPERS_GITHUB_API: `http://127.0.0.1:${server.address().port}/graphql` });
   const reply = refs => () => ({ status: 200, json: { data: { r0: refs } } });
+  // As the dashboard does: ask GitHub, then fetch only what it says changed.
+  const check = async () => {
+    const config = loadConfig();
+    const found = discoverMods(config);
+    const plan = await planFetches(config, found);
+    if (plan.error) return { plan };
+    const cells = await computeStatus(config, found, { fetch: dir => plan.toFetch.has(dir) });
+    return { plan, texts: cells.ModG.map(c => cellText(c, false)) };
+  };
   try {
     pushFix(1);
     answer = reply(snapshot());
-    let r = await runAsync(['-v', 'ModG'], ghEnv);
-    assert.strictEqual(r.code, 0, r.err);
-    assert.deepStrictEqual(row(r.out, 'ModG'), ['1', '↑1']);
-    assert.match(r.err, /Fetching 2 of 2 checkouts/);
+    let r = await check();
+    assert.deepStrictEqual([r.plan.toFetch.size, r.plan.total], [2, 2]);
+    assert.deepStrictEqual(r.texts, ['1', '↑1']);
     assert.strictEqual(requests[0].auth, 'bearer secret');
     assert.match(requests[0].query, /r0: repository\(owner: "Test", name: "ModG"\)/);
 
@@ -377,30 +375,26 @@ test('only fetches the checkouts GitHub reports changes for', async () => {
     const stale = snapshot();
     pushFix(2);
     answer = reply(stale);
-    r = await runAsync(['-v', 'ModG'], ghEnv);
-    assert.deepStrictEqual(row(r.out, 'ModG'), ['1', '↑1']);
-    assert.match(r.err, /Fetching 0 of 2 checkouts/);
+    r = await check();
+    assert.strictEqual(r.plan.toFetch.size, 0);
+    assert.deepStrictEqual(r.texts, ['1', '↑1']);
 
-    // --fetch-all doesn't ask.
-    r = await runAsync(['--fetch-all', 'ModG'], ghEnv);
-    assert.deepStrictEqual(row(r.out, 'ModG'), ['2', '↑2']);
-    assert.strictEqual(requests.length, 2);
-
-    // When GitHub fails, everything is fetched.
-    pushFix(3);
+    // When GitHub fails, the caller hears why.
     answer = () => ({ status: 502, json: {} });
-    r = await runAsync(['ModG'], ghEnv);
-    assert.match(r.err, /Couldn't ask GitHub what changed \(GitHub answered 502\), so fetching every checkout\./);
-    assert.deepStrictEqual(row(r.out, 'ModG'), ['3', '↑3']);
+    assert.deepStrictEqual((await check()).plan, { error: 'GitHub answered 502' });
 
     // A new tag on origin is fetched too.
     git(w, 'tag', '1.20.1-1.0.1');
     git(w, 'push', '-q', 'origin', '1.20.1-1.0.1');
     answer = reply(snapshot());
-    r = await runAsync(['-v', 'ModG'], ghEnv);
-    assert.match(r.err, /Fetching 2 of 2 checkouts/);
+    r = await check();
+    assert.strictEqual(r.plan.toFetch.size, 2);
+    assert.deepStrictEqual(r.texts, ['2', '↑2']);
     assert.ok(git(path.join(tmp, 'gh20', 'ModG'), 'tag', '-l', '1.20.1-1.0.1').trim());
   } finally {
     server.close();
+    process.env.CC_HELPERS_CONFIG = saved.config;
+    delete process.env.GH_TOKEN;
+    delete process.env.CC_HELPERS_GITHUB_API;
   }
 });
