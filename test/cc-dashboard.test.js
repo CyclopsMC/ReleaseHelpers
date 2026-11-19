@@ -205,7 +205,7 @@ test('shows commit details and diffs', async () => {
 test('picks up marks made with cc-mark', async () => {
   const modA = sb.path('mc20-lts', 'ModA');
   const hash = sb.git(modA, 'log', '-1', '--format=%h', '--grep=Fix another crash', 'origin/master-1.20-lts').trim();
-  assert.strictEqual(sb.run(path.join(BIN, 'cc-mark'), ['no-release', hash], { cwd: modA }).code, 0);
+  assert.strictEqual(sb.run(path.join(BIN, 'cc-mark'), ['no-release', hash, '--all-versions'], { cwd: modA }).code, 0);
   const s = await waitForTexts('ModA', ['1', '↑1']);
   assert.match(JSON.stringify(s.mods.find(m => m.name === 'ModA').cells[0].unreleased.dropped), /marked as no release/);
 });

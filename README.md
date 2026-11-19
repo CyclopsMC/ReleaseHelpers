@@ -108,12 +108,13 @@ For the commits it can't tell apart, e.g. a build change that also touched a sou
 - Put `[no release]` anywhere in the commit message.
   To have Claude do that for you, add this to `~/.claude/CLAUDE.md`:
   `In mod repos, add "[no release]" to the body of commit messages for changes players won't notice, like build, CI or test changes.`
-- Or mark the commit afterwards, in a checkout or anywhere else:
+- Or mark the commit afterwards. A mark is for one MC version, as a change may matter on one version and not on another:
   ```bash
-  cc-mark no-release 1a2b3c4
+  cc-mark no-release 1a2b3c4 --version 26-lts
   ```
-  `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes a mark, and `cc-mark list` shows them all.
-  Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash: upmerges keep hashes, so one mark covers all MC versions.
+  In a mod checkout, it is for that checkout's version unless you say otherwise. `--version` can be given more than once, and `--all-versions` marks it for every version (a mark for one version wins over that).
+  `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes its marks (or only those of `--version`), and `cc-mark list` shows them all.
+  Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash and branch. Upmerges keep hashes, so a mark for 26-lts also applies while the commit is still waiting to be upmerged into 26-lts.
 
 `cc-status -v` shows which commits were dropped and why, including your marks.
 

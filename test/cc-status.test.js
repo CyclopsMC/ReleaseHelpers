@@ -259,34 +259,58 @@ test('reports tags that differ from origin instead of failing', () => {
   assert.strictEqual((r.out.match(/local: tag/g) || []).length, 1);
 });
 
-test('cc-mark marks commits as needing a release or not', () => {
+test('cc-mark marks commits per MC version, or for all of them', () => {
   const modA = path.join(tmp, 'mc20-lts', 'ModA');
   const fix = git(modA, 'log', '-1', '--format=%H', '--grep=Fix crash').trim();
   const agents = git(modA, 'log', '-1', '--format=%H', '--grep=Add AGENTS').trim();
+  const mark = (args, cwd = tmp) => run(args, {}, { bin: MARK, cwd });
+  const cells = () => row(run(['--no-fetch', 'ModA']).out, 'ModA');
 
-  let r = run(['no-release', fix.slice(0, 7)], {}, { bin: MARK, cwd: modA });
+  // In a checkout, a mark is for its version: 1.21 still has the fix to upmerge.
+  let r = mark(['no-release', fix.slice(0, 7)], modA);
   assert.strictEqual(r.code, 0, r.err);
-  assert.strictEqual(r.out, `Marked ${fix.slice(0, 9)} ModA: Fix crash as needing no release\n`);
-  r = run(['--no-fetch', '-v', 'ModA']);
-  assert.deepStrictEqual(row(r.out, 'ModA'), ['2', '↑2']);
-  assert.match(r.out, /Fix crash \(marked as no release\)/);
+  assert.strictEqual(r.out, `Marked ${fix.slice(0, 9)} ModA: Fix crash as needing no release on 1.20-lts\n`);
+  assert.deepStrictEqual(cells(), ['2', '↑3']);
+  assert.match(run(['--no-fetch', '-v', 'ModA']).out, /Fix crash \(marked as no release on this version\)/);
 
-  // Outside a checkout, it searches all mod checkouts.
-  r = run(['release', agents.slice(0, 10), '--reason', 'docs ship in the jar'], {}, { bin: MARK });
+  // Elsewhere, you say which versions.
+  r = mark(['no-release', fix]);
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err, /Say which MC versions this mark is for: --version <version> .*, or --all-versions\. Versions: 1\.20-lts, 1\.21-lts/);
+  assert.match(mark(['no-release', fix, '--version', '1.19']).err, /Unknown version 1\.19/);
+  assert.strictEqual(mark(['no-release', fix, '--version', '1.21-lts']).code, 0);
+  assert.deepStrictEqual(cells(), ['2', '↑2']);
+  r = mark(['release', agents.slice(0, 10), '--all-versions', '--reason', 'docs ship in the jar']);
   assert.strictEqual(r.code, 0, r.err);
-  r = run(['--no-fetch', '-v', 'ModA']);
-  assert.deepStrictEqual(row(r.out, 'ModA'), ['3', '↑3']);
-  assert.match(r.out, /Add AGENTS\.md \(marked as release\)/);
-  assert.match(run(['list'], {}, { bin: MARK }).out,
-    new RegExp(`no release  ${fix.slice(0, 9)}  ModA  Fix crash\nrelease     ${agents.slice(0, 9)}  ModA  Add AGENTS\\.md  \\(docs ship in the jar\\)\n`));
+  assert.match(r.out, /as needing a release on all versions\n$/);
+  assert.deepStrictEqual(cells(), ['3', '↑3']);
+  assert.match(run(['--no-fetch', '-v', 'ModA']).out, /Add AGENTS\.md \(marked as release\)/);
+  assert.deepStrictEqual(mark(['list']).out.split('\n').filter(Boolean).map(l => l.split(/ {2,}/).slice(0, 3)), [
+    ['no release', '1.20-lts', fix.slice(0, 9)],
+    ['no release', '1.21-lts', fix.slice(0, 9)],
+    ['release', 'all versions', agents.slice(0, 9)],
+  ]);
 
-  assert.strictEqual(run(['clear', fix, agents], {}, { bin: MARK }).code, 0);
-  assert.deepStrictEqual(row(run(['--no-fetch', 'ModA']).out, 'ModA'), ['3', '↑3']);
-  assert.strictEqual(run(['list'], {}, { bin: MARK }).out, 'No marks yet.\n');
+  // Clearing one version, then everything.
+  assert.strictEqual(mark(['clear', fix, '--version', '1.20-lts']).code, 0);
+  assert.deepStrictEqual(cells(), ['4', '↑3']);
+  assert.strictEqual(mark(['clear', fix, agents]).code, 0);
+  assert.deepStrictEqual(cells(), ['3', '↑3']);
+  assert.strictEqual(mark(['list']).out, 'No marks yet.\n');
 
-  r = run(['no-release', 'deadbeef'], {}, { bin: MARK });
+  r = mark(['no-release', 'deadbeef', '--all-versions']);
   assert.strictEqual(r.code, 1);
   assert.match(r.err, /Commit deadbeef not found/);
+});
+
+test('reads marks of the first format as marks for all versions', () => {
+  const fix = git(path.join(tmp, 'mc20-lts', 'ModA'), 'log', '-1', '--format=%H', '--grep=Fix crash').trim();
+  write(path.join(tmp, 'marks.json'), JSON.stringify({ commits: { [fix]: { release: false, subject: 'Fix crash', mod: 'ModA', date: '2026-11-16' } } }));
+  try {
+    assert.deepStrictEqual(row(run(['--no-fetch', 'ModA']).out, 'ModA'), ['2', '↑2']);
+  } finally {
+    fs.rmSync(path.join(tmp, 'marks.json'));
+  }
 });
 
 test('points to cc-mark when the config still has ignoreCommits', () => {
