@@ -42,7 +42,8 @@ const slimCommit = c => ({
   subject: c.subject,
   ...(c.kind ? { kind: c.kind } : {}),
   ...(c.reason ? { reason: c.reason } : {}),
-  ...(c.marked ? { marked: true } : {}),
+  // The scope of your mark: a branch, or '*' for all versions.
+  ...(c.marked ? { marked: c.marked } : {}),
   fileCount: c.files ? c.files.length : 0,
 });
 const slimList = l => l && { userFacing: l.userFacing.map(slimCommit), dropped: l.dropped.map(slimCommit) };

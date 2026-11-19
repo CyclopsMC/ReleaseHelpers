@@ -260,7 +260,7 @@ function commitRow(mod, c, dropped) {
   if (c.kind === 'translations') badges.push(h('span.badge.translations', null, 'translations'));
   if (c.kind === 'compat') badges.push(h('span.badge.compat', null, 'compat'));
   if (dropped) badges.push(h(c.marked ? 'span.badge.marked' : 'span.badge', null, c.reason));
-  else if (c.marked) badges.push(h('span.badge.marked', null, 'marked as release'));
+  else if (c.marked) badges.push(h('span.badge.marked', null, c.marked === '*' ? 'marked as release' : 'marked as release on this version'));
   const head = h('button.commit-head', {
     'aria-expanded': open ? 'true' : 'false',
     onclick: () => {
