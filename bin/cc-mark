@@ -91,8 +91,9 @@ function scopes(opts, commit, action) {
     });
   }
   if (action === 'clear') return null;
-  const v = commit.inCwd && vs && vs.find(x => x.branch === commit.branch);
-  if (v) return [v.branch];
+  // Without a config, any master-* branch counts as a maintained one.
+  const maintained = vs ? vs.some(x => x.branch === commit.branch) : /^master-/.test(commit.branch || '');
+  if (commit.inCwd && maintained) return [commit.branch];
   return fail(`Say which MC versions this mark is for: --version <version> (more than once for more), or --all-versions.${
     vs ? ` Versions: ${vs.map(x => x.name).join(', ')}` : ''}`);
 }
