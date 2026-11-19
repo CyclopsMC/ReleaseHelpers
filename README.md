@@ -57,7 +57,7 @@ zsh, in `~/.zshrc`:
 source /path/to/ReleaseHelpers/completions/cc-helpers.zsh
 ```
 
-bash, in `~/.bashrc`:
+bash, in `~/.bash_profile` on macOS (Terminal and iTerm start login shells, which read that file and not `~/.bashrc`), or in `~/.bashrc` elsewhere:
 ```bash
 source /path/to/ReleaseHelpers/completions/cc-helpers.bash
 ```

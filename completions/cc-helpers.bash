@@ -1,5 +1,6 @@
 # Bash completion for the ReleaseHelpers commands.
-# Usage: add `source /path/to/ReleaseHelpers/completions/cc-helpers.bash` to ~/.bashrc.
+# Usage: add `source /path/to/ReleaseHelpers/completions/cc-helpers.bash` to ~/.bash_profile on macOS,
+# or ~/.bashrc elsewhere. It works with the bash 3.2 that macOS ships.
 
 _cc_mark() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
