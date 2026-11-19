@@ -216,12 +216,16 @@ test('refuses to start when a release tag differs from origin', () => {
   assert.match(r.err, /Fix the problems above first \(1\.20-lts\)/);
 });
 
-test('has nothing to release when the only change is marked as no release', () => {
+test('skips versions where the only change is marked as no release', () => {
   setup();
   const modA = sb.path('mc20-lts', 'ModA');
   const fix = sb.git(modA, 'log', '-1', '--format=%h', '--grep=Fix crash').trim();
+  // Marked for 1.20 only: the chain starts at 1.21, where the fix still counts.
   assert.strictEqual(sb.run('cc-mark', ['no-release', fix], { cwd: modA }).code, 0);
-  const r = chain(['ModA'], '');
+  let r = chain(['ModA'], '');
+  assert.match(r.out, /Release chain for ModA:\n {2}1\.21-lts {2}/);
+  assert.strictEqual(sb.run('cc-mark', ['no-release', fix, '--all-versions'], { cwd: modA }).code, 0);
+  r = chain(['ModA'], '');
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.out, /Nothing to release for ModA\./);
 });
