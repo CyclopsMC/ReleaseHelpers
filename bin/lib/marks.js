@@ -1,10 +1,13 @@
 'use strict';
-// Commits you marked as needing a release or not, overriding the commit filter.
-// Written by cc-mark (and the dashboard); you never edit the file yourself.
+// Commits you marked as needing a release or not, overriding the commit filter. A mark applies to
+// one maintained branch (MC version), or to all of them ('*'); one for a branch wins.
+// Written by cc-mark and cc-dashboard; you never edit the file yourself.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+
+const ALL = '*';
 
 function marksPath() {
   if (process.env.CC_HELPERS_MARKS) return process.env.CC_HELPERS_MARKS;
@@ -12,7 +15,14 @@ function marksPath() {
   return path.join(data, 'cc-helpers', 'marks.json');
 }
 
-// { file, commits: { <full hash>: { release, subject, mod, reason, date } } }
+// An entry of the first format had one mark for all versions at the top level.
+function normalize(entry) {
+  if (!entry || entry.marks) return entry;
+  const { release, reason, date, ...rest } = entry;
+  return { ...rest, marks: { [ALL]: { release, ...(reason ? { reason } : {}), date } } };
+}
+
+// { file, commits: { <full hash>: { subject, mod, marks: { <branch> | '*': { release, reason, date } } } } }
 function loadMarks(file = marksPath()) {
   let raw;
   try {
@@ -27,7 +37,9 @@ function loadMarks(file = marksPath()) {
   } catch (e) {
     throw new Error(`Invalid JSON in ${file}: ${e.message}`);
   }
-  return { file, commits: (json && json.commits) || {} };
+  const commits = {};
+  for (const [hash, entry] of Object.entries((json && json.commits) || {})) commits[hash] = normalize(entry);
+  return { file, commits };
 }
 
 function saveMarks(marks) {
@@ -45,14 +57,33 @@ function updateMarks(change, file = marksPath()) {
   return marks;
 }
 
-function setMark(hash, { release, subject, mod, reason }, file) {
+// The mark that applies on a branch, as { release, reason, date, scope }, or null.
+function markFor(commits, hash, branch) {
+  const entry = commits && commits[hash];
+  if (!entry || !entry.marks) return null;
+  const scope = branch && entry.marks[branch] ? branch : (entry.marks[ALL] ? ALL : null);
+  return scope ? { ...entry.marks[scope], scope } : null;
+}
+
+// scope: a branch, or '*' for all versions.
+function setMark(hash, { release, subject, mod, reason, scope = ALL }, file) {
   return updateMarks(commits => {
-    commits[hash] = { release: !!release, subject, mod, ...(reason ? { reason } : {}), date: new Date().toISOString() };
+    const entry = commits[hash] || { subject, mod, marks: {} };
+    entry.subject = subject || entry.subject;
+    entry.mod = mod || entry.mod;
+    entry.marks[scope] = { release: !!release, ...(reason ? { reason } : {}), date: new Date().toISOString() };
+    commits[hash] = entry;
   }, file);
 }
 
-function clearMark(hash, file) {
-  return updateMarks(commits => { delete commits[hash]; }, file);
+// Removes the mark for one scope, or with scope null every mark of the commit.
+function clearMark(hash, scope = null, file) {
+  return updateMarks(commits => {
+    const entry = commits[hash];
+    if (!entry) return;
+    if (scope) delete entry.marks[scope];
+    if (!scope || !Object.keys(entry.marks).length) delete commits[hash];
+  }, file);
 }
 
-module.exports = { marksPath, loadMarks, saveMarks, setMark, clearMark };
+module.exports = { ALL, marksPath, loadMarks, saveMarks, setMark, clearMark, markFor };

@@ -123,7 +123,7 @@ function printCommits(title, commits, withReason) {
   if (!commits.length) return;
   console.log(`    ${title}:`);
   for (const c of commits) {
-    const note = withReason ? c.reason : (c.marked ? 'marked as release' : null);
+    const note = withReason ? c.reason : (c.marked ? `marked as release${c.marked === '*' ? '' : ' on this version'}` : null);
     console.log(`      ${dim(c.hash.slice(0, 9))} ${c.subject}${note ? dim(` (${note})`) : ''}`);
   }
 }

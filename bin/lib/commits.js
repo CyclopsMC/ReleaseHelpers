@@ -2,6 +2,7 @@
 // Decides which commits matter to players, i.e. warrant a release and a changelog entry.
 
 const { git } = require('./git');
+const { ALL, markFor } = require('./marks');
 
 // Files that don't change what players get.
 const DEV_ONLY_PATHS = [
@@ -29,20 +30,26 @@ const TRANSLATION_FILE = /(^|\/)lang\/[^/]+$/;
 // In commit messages, says the commit needs no release.
 const NO_RELEASE_MARKER = /\[no[ -]release\]/i;
 
-// The filter has extra `devOnlyPaths` (regexes) from the config and your `marks` (by full hash,
-// see marks.js); an array is taken as devOnlyPaths.
+// The filter has extra `devOnlyPaths` (regexes) from the config, your `marks` (see marks.js), and
+// the `branch` whose release is being decided, for marks on one version; an array is taken as
+// devOnlyPaths.
 function filterOptions(filter = {}) {
-  return Array.isArray(filter) ? { devOnlyPaths: filter, marks: {} } : { devOnlyPaths: [], marks: {}, ...filter };
+  return Array.isArray(filter) ? { devOnlyPaths: filter, marks: {}, branch: null } : { devOnlyPaths: [], marks: {}, branch: null, ...filter };
 }
 
-// Returns { userFacing: true, kind } or { userFacing: false, reason }, with `marked: true` when
-// your mark decided it.
+const withBranch = (filter, branch) => ({ ...filterOptions(filter), branch });
+
+// Returns { userFacing: true, kind } or { userFacing: false, reason }. When your mark decided it,
+// `marked` is its scope: the branch, or '*' for all versions.
 function classify(commit, filter) {
-  const { devOnlyPaths, marks } = filterOptions(filter);
-  const mark = marks[commit.hash];
-  if (mark && !mark.release) return { userFacing: false, reason: 'marked as no release', marked: true };
+  const { devOnlyPaths, marks, branch } = filterOptions(filter);
+  const mark = markFor(marks, commit.hash, branch);
+  const where = mark && mark.scope !== ALL ? ' on this version' : '';
+  if (mark && !mark.release) return { userFacing: false, reason: `marked as no release${where}`, marked: mark.scope };
   const result = classifyByContent(commit, devOnlyPaths);
-  if (mark && mark.release) return result.userFacing ? { ...result, marked: true } : { userFacing: true, kind: 'change', marked: true };
+  if (mark && mark.release) {
+    return result.userFacing ? { ...result, marked: mark.scope } : { userFacing: true, kind: 'change', marked: mark.scope };
+  }
   return result;
 }
 
@@ -93,11 +100,11 @@ function partition(commits, filter) {
   const dropped = [];
   for (const c of commits) {
     const r = classify(c, filter);
-    const marked = r.marked ? { marked: true } : {};
+    const marked = r.marked ? { marked: r.marked } : {};
     if (r.userFacing) userFacing.push({ ...c, kind: r.kind, ...marked });
     else dropped.push({ ...c, reason: r.reason, ...marked });
   }
   return { userFacing, dropped };
 }
 
-module.exports = { classify, listCommits, partition, DEV_ONLY_PATHS };
+module.exports = { classify, listCommits, partition, withBranch, DEV_ONLY_PATHS };
