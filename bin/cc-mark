@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Marks commits as needing a release or not, for cc-status and the other helpers.
+// Marks commits as needing a release or not, for cc-dashboard and the other helpers.
 
 const path = require('path');
 const { gitOrNull } = require('./lib/git');
@@ -9,7 +9,7 @@ const { ALL, loadMarks, setMark, clearMark, marksPath } = require('./lib/marks')
 const HELP = `Usage: cc-mark <no-release|release|clear> <commit>... [--version <version>]... [--all-versions] [--reason <text>]
        cc-mark list
 
-Marks commits for cc-status, cc-changelog-draft and cc-release-chain, overriding the commit filter:
+Marks commits for cc-dashboard, cc-changelog-draft and cc-release-chain, overriding the commit filter:
   no-release   the commit needs no release (e.g. a build change that also touched a source file)
   release      the commit needs a release, although the filter drops it
   clear        remove its marks
@@ -124,6 +124,8 @@ async function main() {
   }
   const action = args.shift();
   if (action === 'list') return list();
+  // For shell completion.
+  if (action === '--list-versions') return (versions() || []).forEach(v => console.log(v.name));
   if (!['no-release', 'release', 'clear'].includes(action)) fail(`Unknown action ${action}\n\n${HELP}`);
   const opts = { reason: undefined, versions: [], allVersions: false };
   const refs = [];

@@ -4,12 +4,12 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-status`, `cc-dashboard`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-dashboard`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
 
-`cc-status` reads `~/.config/cc-helpers.json` (or the file in `$CC_HELPERS_CONFIG`).
+The helpers read `~/.config/cc-helpers.json` (or the file in `$CC_HELPERS_CONFIG`).
 Start from [`cc-helpers.example.json`](cc-helpers.example.json):
 
 ```json
@@ -29,7 +29,6 @@ Start from [`cc-helpers.example.json`](cc-helpers.example.json):
   Checkouts not named after their origin repository (e.g. a temporary copy) are skipped.
 - `jobs` (optional): how many repos to process in parallel. Default: 8.
 - `devOnlyPaths` (optional): extra regexes for files that don't affect players, on top of the built-in ones.
-- `github` (optional): `false` to always fetch every checkout, instead of first asking GitHub what changed.
 
 Used by `cc-build` and `cc-release-chain` (all optional):
 
@@ -63,47 +62,17 @@ bash, in `~/.bashrc`:
 source /path/to/ReleaseHelpers/completions/cc-helpers.bash
 ```
 
-## cc-status
+## Which commits need a release
 
-Shows which mods need a release or upmerge, per maintained MC version:
+The helpers find each mod's unreleased commits per MC version: the commits since its last release on that branch, and the commits on lower maintained branches that still have to be upmerged.
+Mods without any release on any version (like the compat mods) are only upmerged.
 
-```text
-$ cc-status
-                     1.20-lts  1.21-lts  26-lts     26
-CommonCapabilities          .         .       2    new
-IntegratedDynamics          .         .       .    new
-IntegratedScripting         1       1↑1      ↑2  new↑2
-IntegratedTerminals         .         .     1↑1  new↑2
-
-To do, by lowest MC version:
-1.20-lts: IntegratedScripting
-26-lts: CommonCapabilities, IntegratedTerminals
-```
-
-- `N`: unreleased commits since the last release on that branch.
-- `↑N`: commits on lower maintained branches that this branch doesn't have yet (to upmerge).
-- `t`: all of those commits are translations. Such mods are listed under "Only translations".
-- `new`: no release on this MC version yet.
-- `!`: the local checkout needs attention: wrong branch, uncommitted changes, unpushed commits or a merge in progress.
-- `-`: no checkout for this version. `?`: error, see the bottom of the output.
-- Mods without any release on any version (like the compat mods) are only upmerged: their cells only show `↑N`, and they are listed under "Upmerge only".
-
-The "To do" list groups mods by the lowest MC version that needs work, which is where a release chain for that mod starts.
-
-Options:
-- `cc-status IntegratedDynamics EvilCraft`: only these mods.
-- `-v`: list the commits behind each cell, the ones the filter dropped (with the reason), and local checkout problems.
-- `--no-fetch`: skip fetching and use the current remote-tracking branches (instant, offline).
-- `--fetch-all`: fetch every checkout, without asking GitHub what changed first.
-- `--no-dashboard`: don't use a running `cc-dashboard`, see below.
-
-With a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the one of the [GitHub CLI](https://cli.github.com/), `gh auth login`), `cc-status` first asks GitHub for the branches and recent tags of all mods in one request, and only fetches the checkouts where something changed.
-Without a token, it fetches every checkout.
+A filter leaves out commits players won't notice: `Bump mod version` commits, and commits that only touch files players don't get, like CI, tests, game tests, Gradle files and build logic, `*.md` files and changelogs.
+`Bump compat version` commits only count when their message lists changelog entries, and translations count but are told apart.
 
 ### Commits that need no release
 
-The filter drops commits that only touch files players don't get, like build files and tests.
-For the commits it can't tell apart, e.g. a build change that also touched a source file:
+For the commits the filter can't tell apart, e.g. a build change that also touched a source file:
 
 - Put `[no release]` anywhere in the commit message.
   To have Claude do that for you, add this to `~/.claude/CLAUDE.md`:
@@ -116,11 +85,9 @@ For the commits it can't tell apart, e.g. a build change that also touched a sou
   `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes its marks (or only those of `--version`), and `cc-mark list` shows them all.
   Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash and branch. Upmerges keep hashes, so a mark for 26-lts also applies while the commit is still waiting to be upmerged into 26-lts.
 
-`cc-status -v` shows which commits were dropped and why, including your marks.
-
 ## cc-dashboard
 
-The `cc-status` table as a page that stays up to date, to keep open in a browser tab:
+A page with the status of every mod on every maintained MC version, kept up to date, to keep open in a browser tab:
 
 ```bash
 cc-dashboard install
@@ -131,9 +98,27 @@ cc-dashboard open
 
 `install` runs it in the background from now on, also after login (macOS); `cc-dashboard uninstall` stops that. You can also just run `cc-dashboard` in a terminal.
 
+The table has a row per mod and a column per MC version:
+
+- `N`: unreleased commits since the last release on that branch.
+- `↑N`: commits on lower maintained branches that this branch doesn't have yet (to upmerge).
+- `t`: all of those commits are translations.
+- `new`: no release on this MC version yet.
+- `!`: the checkout needs attention: wrong branch, uncommitted changes, unpushed commits, a merge in progress, or a last-release tag that differs from origin.
+- `-`: no checkout for this version. `?`: error, shown below the table.
+- Mods without any release (like the compat mods) are only upmerged: their cells only show `↑N`.
+- Below the table, the mods with work are grouped by the lowest MC version that needs it, which is where their release chain starts.
+
+How it stays up to date:
+
 - It watches the `.git` folder of every checkout, so commits, branch switches, fetches and upmerges show within a second. Edits in the working tree (the `!` for uncommitted changes) show within a minute, or as soon as you look at the page.
-- Every 2 minutes it asks GitHub what changed, and fetches only those checkouts, like `cc-status`. Once an hour it fetches everything. Without a GitHub token, it fetches everything every 10 minutes. It doesn't fetch the checkouts of a mod while a release chain for that mod runs.
+- With a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the one of the [GitHub CLI](https://cli.github.com/), `gh auth login`), it asks GitHub every 2 minutes for the branches, recent tags and CI states of all mods, in one request, and only fetches the checkouts where something changed. Once an hour it fetches everything.
+- Without a token, it fetches everything every 10 minutes, and shows no CI states.
+- It doesn't fetch the checkouts of a mod while a release chain for that mod runs.
 - **Refresh** asks GitHub and fetches right away; Shift-click fetches every checkout.
+
+What you can do on it:
+
 - Click a cell to see its commits: the unreleased ones, the ones to upmerge, and the ones the filter left out (with the reason). Click a commit for its message, files and diff.
 - **Marking commits**: click **No release** next to a commit (e.g. a build change that touched a source file), or **Needs release** on one the filter left out, then choose whether it is for the version of the cell or for all versions. **Unmark** undoes it. These are the same marks as `cc-mark` makes.
 - **Release chains**: **Start release chain** opens a terminal with `cc-release-chain <mod>`, and **Rehearse** with `--rehearse`. **Ask before each push** adds `--confirm`. **Terminal** and **IDE** open the checkout of the selected version.
@@ -142,14 +127,16 @@ cc-dashboard open
 - With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links.
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
 - The tab title shows how many mods have work, e.g. `(3) CC status`.
-- While it runs, `cc-status` is instant: it shows the dashboard's status, after asking it to fetch what changed.
-- It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
+
+It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
 
 Optional settings under `"dashboard"` in the config:
 - `terminal`: where the buttons open terminals: `"Terminal"` (the default on macOS), `"iTerm"`, or a command where `{cmd}` is the command line to run, e.g. `["kitty", "sh", "-c", "{cmd}; exec $SHELL"]`.
   The first time, macOS asks whether node may control Terminal (or iTerm); allow it.
 - `ide`: a command to open a checkout, where `{dir}` is its path, e.g. `["idea", "{dir}"]` or `["open", "-a", "IntelliJ IDEA", "{dir}"]`. Without it, there is no IDE button.
 - `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600) and `fetchAllWithoutGitHub` (600).
+
+`"github": false` at the top level of the config stops it from asking GitHub; it then fetches everything every 10 minutes.
 
 ## Changelog drafts
 
@@ -207,7 +194,7 @@ cc-release-chain IntegratedDynamics
 cc-release-chain IntegratedTerminals 1.21-lts
 ```
 
-Without a version, it starts at the lowest version with unreleased changes (as in `cc-status`).
+Without a version, it starts at the lowest version with unreleased changes.
 It first shows the chain and asks to start, then does this for each version, in order:
 
 1. **Sync**: checks the branch, fetches, and fast-forwards. Unpushed local commits are only released after you confirm.

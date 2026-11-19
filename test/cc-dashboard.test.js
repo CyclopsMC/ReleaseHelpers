@@ -273,21 +273,6 @@ test('shows a running release chain and what it waits for', async () => {
   await waitFor(async () => (await state()).mods.find(x => x.name === 'ModA').chains.length === 0, 'the chain to be gone');
 });
 
-test('cc-status shows the status of the running dashboard', () => {
-  const r = sb.run(path.join(BIN, 'cc-status'), ['-v', '--no-fetch']);
-  assert.strictEqual(r.code, 0, r.err);
-  assert.match(r.err, /Status from cc-dashboard/);
-  assert.match(r.out, /ModA +1 +↑1\n/);
-  assert.match(r.out, /Fix another crash \(marked as no release\)/);
-  // Fetching goes through the dashboard too.
-  const fetched = sb.run(path.join(BIN, 'cc-status'), ['-v']);
-  assert.strictEqual(fetched.code, 0, fetched.err);
-  assert.match(fetched.err, /Status from cc-dashboard/);
-  const own = sb.run(path.join(BIN, 'cc-status'), ['-v', '--no-fetch', '--no-dashboard']);
-  assert.ok(!own.err.includes('cc-dashboard'), own.err);
-  assert.strictEqual(own.out, r.out);
-});
-
 test('refuses to run twice, and stops cleanly', async () => {
   const second = sb.run(process.execPath, [path.join(BIN, 'cc-dashboard'), '--port', '0']);
   assert.strictEqual(second.code, 1);

@@ -20,9 +20,9 @@ const LABEL = 'com.cyclopsmc.cc-dashboard';
 const HELP = `Usage: cc-dashboard [--port <n>] [--open]
        cc-dashboard <open|install|uninstall>
 
-Serves a page with the cc-status table on http://127.0.0.1:${DEFAULT_PORT}/ and keeps it up to date:
-checkouts are watched for changes, GitHub is asked what changed every few minutes, and only those
-checkouts are fetched. Click a cell to see its commits. While it runs, cc-status is instant.
+Serves a page with the release status of every mod on http://127.0.0.1:${DEFAULT_PORT}/ and keeps it
+up to date: checkouts are watched for changes, GitHub is asked what changed every few minutes, and
+only those checkouts are fetched. Click a cell to see its commits, mark them, or start a release chain.
 
   (no command)  run in this terminal; Ctrl-C stops it
   open          open the page of the running dashboard in your browser

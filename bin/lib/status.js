@@ -300,7 +300,8 @@ function modWork(cells) {
   return { start, group: commits.every(c => c.kind === 'translations') ? 'translations' : 'todo' };
 }
 
-// The short text of a cell, as in the cc-status table.
+// The short text of a cell: N unreleased commits, ↑N to upmerge, t for only translations, new
+// for no release on this MC version yet, ! for a checkout that needs attention.
 function cellText(cell, upmergeOnly) {
   if (cell.missing) return '-';
   if (cell.error) return '?';

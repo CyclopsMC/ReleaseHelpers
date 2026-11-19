@@ -1,8 +1,7 @@
 'use strict';
-// Finds a running cc-dashboard and talks to it (used by cc-status and cc-dashboard itself).
+// Finds a running cc-dashboard, so a second one doesn't start and `cc-dashboard open` finds it.
 
 const fs = require('fs');
-const http = require('http');
 const path = require('path');
 const { stateDir, isAlive } = require('./lock');
 
@@ -37,34 +36,4 @@ function runningDashboard(configFile) {
   return info;
 }
 
-function call(info, method, pathname, body, timeoutMs = 300000) {
-  return new Promise((resolve, reject) => {
-    const req = http.request({
-      host: '127.0.0.1',
-      port: info.port,
-      method,
-      path: pathname,
-      headers: { 'Content-Type': 'application/json', 'X-CC-Token': info.token, Host: `127.0.0.1:${info.port}` },
-      timeout: timeoutMs,
-    }, res => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', d => { data += d; });
-      res.on('end', () => {
-        let json = null;
-        try {
-          json = JSON.parse(data);
-        } catch (e) {
-          // Not JSON.
-        }
-        if (res.statusCode >= 400) reject(new Error((json && json.error) || `HTTP ${res.statusCode}`));
-        else resolve(json);
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('the dashboard did not answer in time')));
-    req.on('error', reject);
-    req.end(body ? JSON.stringify(body) : undefined);
-  });
-}
-
-module.exports = { readInfo, writeInfo, removeInfo, runningDashboard, call, infoFile };
+module.exports = { readInfo, writeInfo, removeInfo, runningDashboard, infoFile };
