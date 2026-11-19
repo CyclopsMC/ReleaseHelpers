@@ -9,7 +9,7 @@ const { spawnSync } = require('child_process');
 const { loadConfig } = require('./lib/config');
 const { git, gitOrNull } = require('./lib/git');
 const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing, isUpmergeOnly } = require('./lib/status');
-const { listCommits, partition } = require('./lib/commits');
+const { listCommits, partition, withBranch } = require('./lib/commits');
 const { readWorkingProps, readPropsAt, cyclopsVersion } = require('./lib/props');
 const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/changelog');
 const { runBuild, buildEnv, buildEnabled, buildCommand } = require('./lib/build');
@@ -537,7 +537,7 @@ async function releaseVersion(ctx) {
       clearState(ctx);
       return;
     }
-    const pending = partition(await listCommits(repo, [`refs/tags/${since}..HEAD`]), ctx.config.commitFilter);
+    const pending = partition(await listCommits(repo, [`refs/tags/${since}..HEAD`]), withBranch(ctx.config.commitFilter, version.branch));
     if (!pending.userFacing.length) {
       await pushUpmerge(ctx, `nothing to release since ${since}`);
       clearState(ctx);

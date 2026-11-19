@@ -48,14 +48,28 @@ test('extra dev-only paths from the config are honored', () => {
   assert.strictEqual(classify(c('Tweak', ['docs/x.txt'])).userFacing, true);
 });
 
+const allVersions = release => ({ marks: { '*': { release } } });
+
 test('your marks override the filter, both ways', () => {
   const fix = { hash: 'a'.repeat(40), subject: 'Enable the Gradle configuration cache', body: '', files: ['build.gradle', 'src/main/java/A.java'] };
   const docs = { hash: 'b'.repeat(40), subject: 'Bump CyclopsCore requirement', body: '', files: ['gradle.properties'] };
-  const marks = { [fix.hash]: { release: false }, [docs.hash]: { release: true } };
-  assert.deepStrictEqual(classify(fix, { marks }), { userFacing: false, reason: 'marked as no release', marked: true });
-  assert.deepStrictEqual(classify(docs, { marks }), { userFacing: true, kind: 'change', marked: true });
+  const marks = { [fix.hash]: allVersions(false), [docs.hash]: allVersions(true) };
+  assert.deepStrictEqual(classify(fix, { marks }), { userFacing: false, reason: 'marked as no release', marked: '*' });
+  assert.deepStrictEqual(classify(docs, { marks }), { userFacing: true, kind: 'change', marked: '*' });
   assert.deepStrictEqual(classify(fix), { userFacing: true, kind: 'change' });
   assert.strictEqual(classify(docs).userFacing, false);
+});
+
+test('a mark for one version only applies on that branch, and wins over one for all versions', () => {
+  const fix = { hash: 'a'.repeat(40), subject: 'Fix crash', body: '', files: ['src/main/java/A.java'] };
+  const marks = { [fix.hash]: { marks: { 'master-26': { release: false } } } };
+  assert.deepStrictEqual(classify(fix, { marks, branch: 'master-26' }),
+    { userFacing: false, reason: 'marked as no release on this version', marked: 'master-26' });
+  assert.deepStrictEqual(classify(fix, { marks, branch: 'master-26-lts' }), { userFacing: true, kind: 'change' });
+  marks[fix.hash].marks['*'] = { release: false };
+  marks[fix.hash].marks['master-26'] = { release: true };
+  assert.strictEqual(classify(fix, { marks, branch: 'master-26' }).userFacing, true);
+  assert.strictEqual(classify(fix, { marks, branch: 'master-26-lts' }).userFacing, false);
 });
 
 test('[no release] in the message drops a commit', () => {
@@ -64,7 +78,7 @@ test('[no release] in the message drops a commit', () => {
   assert.strictEqual(classify({ ...c('Tweak build', ['src/main/java/A.java']), body: 'Only for CI.\n\n[No-Release]' }).userFacing, false);
   // A release mark wins over the marker.
   const commit = { ...c('Tweak [no release]', ['src/main/java/A.java']), hash: 'c'.repeat(40) };
-  assert.strictEqual(classify(commit, { marks: { [commit.hash]: { release: true } } }).userFacing, true);
+  assert.strictEqual(classify(commit, { marks: { [commit.hash]: allVersions(true) } }).userFacing, true);
 });
 
 test('commits without file changes are dropped', () => {
