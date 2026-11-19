@@ -7,24 +7,14 @@ fi
 
 _cc_helpers_mods() {
   local -a mods
-  mods=(${(f)"$(cc-status --list-mods 2>/dev/null)"})
+  mods=(${(f)"$(cc-release-chain --list-mods 2>/dev/null)"})
   _describe -t mods 'mod' mods
 }
 
 _cc_helpers_versions() {
   local -a versions
-  versions=(${(f)"$(cc-status --list-versions 2>/dev/null)"})
+  versions=(${(f)"$(cc-release-chain --list-versions 2>/dev/null)"})
   _describe -t versions 'version' versions
-}
-
-_cc_status() {
-  _arguments -s \
-    '(-v --verbose)'{-v,--verbose}'[list the commits behind each cell]' \
-    '--no-fetch[use the current remote-tracking branches]' \
-    '--fetch-all[fetch every checkout, without asking GitHub what changed]' \
-    '(-j --jobs)'{-j,--jobs}'[number of repos to process in parallel]:jobs:' \
-    '(- *)'{-h,--help}'[show help]' \
-    '*:mod:_cc_helpers_mods'
 }
 
 _cc_mark() {
@@ -39,7 +29,7 @@ _cc_mark() {
     _describe -t actions 'action' actions
   else
     local -a versions
-    versions=(${(f)"$(cc-status --list-versions 2>/dev/null)"})
+    versions=(${(f)"$(cc-mark --list-versions 2>/dev/null)"})
     _arguments \
       '--reason[why]:reason:' \
       '*--version[an MC version the mark is for]:version:($versions)' \
@@ -65,7 +55,6 @@ _cc_build() {
     '(- *)'{-h,--help}'[show help]'
 }
 
-compdef _cc_status cc-status
+compdef _cc_mark cc-mark
 compdef _cc_release_chain cc-release-chain
 compdef _cc_build cc-build
-compdef _cc_mark cc-mark

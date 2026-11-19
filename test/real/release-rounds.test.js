@@ -3,7 +3,7 @@
 // the commits just before each round. Only Gradle, Claude, the editor and GPG are stand-ins.
 // Needs network access (clones from GitHub). Prints a transcript of the commands and their output.
 // Run with: node --test --test-reporter=spec test/real/*.test.js
-// After an intended change to drafts or cc-status: UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec test/real/*.test.js
+// After an intended change to drafts or the status: UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec test/real/*.test.js
 // Set CC_REAL_REPOS_DIR to keep the clones between runs.
 
 const { test, afterEach } = require('node:test');
@@ -214,8 +214,9 @@ for (const round of ROUNDS) {
       CC_PUBLISHED: sb.path('published'),
       CC_GITHUB: github,
     };
-    const status = runMerged('cc-status', [], { env });
-    group('$ cc-status', status.out);
+    // The status as cc-dashboard shows it (fetching, like the dashboard does).
+    const status = runMerged(process.execPath, [path.join(__dirname, 'print-status.js')], { env });
+    group('The status, as cc-dashboard computes it', status.out);
 
     const before = sb.git(github, 'for-each-ref');
     const heads = versions.map(v => sb.git(sb.path(v.dir, mod), 'rev-parse', 'HEAD'));
@@ -225,8 +226,8 @@ for (const round of ROUNDS) {
     group(`$ cc-release-chain --rehearse ${mod}   (answers typed: ${answers.join(', ')})`, r.out);
 
     print('Checks:');
-    check('cc-status exits successfully', () => assert.strictEqual(status.code, 0));
-    check('cc-status output matches the snapshot', () => checkSnapshot(`${mod}/cc-status.txt`, status.out));
+    check('the status has no errors', () => assert.strictEqual(status.code, 0));
+    check('the status matches the snapshot', () => checkSnapshot(`${mod}/status.txt`, status.out));
     check('cc-release-chain --rehearse exits successfully', () => assert.strictEqual(r.code, 0));
     check('nothing was pushed to the stand-in for GitHub', () => assert.strictEqual(sb.git(github, 'for-each-ref'), before));
     check('the checkouts were not changed', () => {
