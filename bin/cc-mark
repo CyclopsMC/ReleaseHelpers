@@ -4,20 +4,24 @@
 
 const path = require('path');
 const { gitOrNull } = require('./lib/git');
-const { loadMarks, setMark, clearMark, marksPath } = require('./lib/marks');
+const { ALL, loadMarks, setMark, clearMark, marksPath } = require('./lib/marks');
 
-const HELP = `Usage: cc-mark <no-release|release|clear> <commit>... [--reason <text>]
+const HELP = `Usage: cc-mark <no-release|release|clear> <commit>... [--version <version>]... [--all-versions] [--reason <text>]
        cc-mark list
 
 Marks commits for cc-status, cc-changelog-draft and cc-release-chain, overriding the commit filter:
   no-release   the commit needs no release (e.g. a build change that also touched a source file)
   release      the commit needs a release, although the filter drops it
-  clear        remove the mark
+  clear        remove its marks
   list         show all marks
 
+A mark applies to one MC version: by default the one of the checkout you run it in. Use
+--version (e.g. 26-lts, more than once for more versions) or --all-versions to choose.
+A mark for a version wins over one for all versions. Without either, clear removes all marks
+of the commit.
+
 Commits are hashes (at least 7 characters), looked up in the current checkout, or else in the
-mod checkouts of the config. As upmerges keep commit hashes, one mark covers all MC versions.
-Marks are stored in ${marksPath()}.
+mod checkouts of the config. Marks are stored in ${marksPath()}.
 `;
 
 function fail(message) {
@@ -25,49 +29,89 @@ function fail(message) {
   process.exit(1);
 }
 
+function config() {
+  const { loadConfig } = require('./lib/config');
+  return loadConfig();
+}
+
 async function lookup(dir, ref) {
   const hash = await gitOrNull(dir, ['rev-parse', '-q', '--verify', `${ref}^{commit}`]);
   if (!hash) return null;
   const subject = await gitOrNull(dir, ['log', '-1', '--format=%s', hash]);
   const top = await gitOrNull(dir, ['rev-parse', '--show-toplevel']);
-  return { hash, subject, mod: path.basename(top || dir) };
+  const branch = await gitOrNull(dir, ['symbolic-ref', '-q', '--short', 'HEAD']);
+  return { hash, subject, mod: path.basename(top || dir), branch };
 }
 
 // Finds the commit in the current checkout, or else in all mod checkouts.
 async function resolve(ref) {
   if (!/^[0-9a-f]{7,40}$/i.test(ref)) fail(`${ref} is not a commit hash of at least 7 characters`);
   const here = await lookup(process.cwd(), ref);
-  if (here) return here;
-  const { loadConfig } = require('./lib/config');
+  if (here) return { ...here, inCwd: true };
   const { discoverMods } = require('./lib/status');
-  let config;
+  let cfg;
   try {
-    config = loadConfig();
+    cfg = config();
   } catch (e) {
     fail(`${ref} is not in the current dir, and the mod checkouts can't be searched: ${e.message}`);
   }
-  const { mods, byVersion } = discoverMods(config);
+  const { mods, byVersion } = discoverMods(cfg);
   const found = new Map();
   for (const mod of mods) {
-    const v = config.versions.find((_, i) => byVersion[i].has(mod));
+    const v = cfg.versions.find((_, i) => byVersion[i].has(mod));
     const r = await lookup(path.join(v.dir, mod), ref);
     if (r) found.set(r.hash, r);
   }
   if (found.size === 0) fail(`Commit ${ref} not found in the current dir or in any mod checkout`);
   if (found.size > 1) fail(`${ref} is ambiguous: ${[...found.values()].map(r => `${r.mod} ${r.hash.slice(0, 12)}`).join(', ')}`);
-  return [...found.values()][0];
+  return { ...[...found.values()][0], inCwd: false };
+}
+
+// The maintained versions, or null without a config.
+function versions() {
+  try {
+    return config().versions;
+  } catch (e) {
+    return null;
+  }
+}
+
+const versionName = (vs, scope) => (scope === ALL ? 'all versions' : ((vs || []).find(v => v.branch === scope) || { name: scope }).name);
+
+// Branches (or '*') the action applies to; null means every mark (clear only).
+function scopes(opts, commit, action) {
+  if (opts.allVersions) return [ALL];
+  const vs = versions();
+  if (opts.versions.length) {
+    return opts.versions.map(name => {
+      const v = vs && vs.find(x => x.name === name || x.branch === name);
+      if (v) return v.branch;
+      if (/^master-/.test(name)) return name;
+      return fail(`Unknown version ${name}.${vs ? ` Versions: ${vs.map(x => x.name).join(', ')}` : ''}`);
+    });
+  }
+  if (action === 'clear') return null;
+  const v = commit.inCwd && vs && vs.find(x => x.branch === commit.branch);
+  if (v) return [v.branch];
+  return fail(`Say which MC versions this mark is for: --version <version> (more than once for more), or --all-versions.${
+    vs ? ` Versions: ${vs.map(x => x.name).join(', ')}` : ''}`);
 }
 
 function list() {
-  const entries = Object.entries(loadMarks().commits)
-    .sort((a, b) => String(a[1].date).localeCompare(String(b[1].date)));
-  if (!entries.length) {
+  const vs = versions();
+  const rows = [];
+  for (const [hash, entry] of Object.entries(loadMarks().commits)) {
+    for (const [scope, m] of Object.entries(entry.marks)) rows.push({ hash, entry, scope, m });
+  }
+  if (!rows.length) {
     console.log('No marks yet.');
     return;
   }
-  for (const [hash, m] of entries) {
-    console.log(`${(m.release ? 'release' : 'no release').padEnd(10)}  ${hash.slice(0, 9)}  ${m.mod || '?'}  ${m.subject || ''}`
-      + `${m.reason ? `  (${m.reason})` : ''}`);
+  rows.sort((a, b) => String(a.m.date).localeCompare(String(b.m.date)));
+  const width = Math.max(...rows.map(r => versionName(vs, r.scope).length));
+  for (const { hash, entry, scope, m } of rows) {
+    console.log(`${(m.release ? 'release' : 'no release').padEnd(10)}  ${versionName(vs, scope).padEnd(width)}  ${hash.slice(0, 9)}  `
+      + `${entry.mod || '?'}  ${entry.subject || ''}${m.reason ? `  (${m.reason})` : ''}`);
   }
 }
 
@@ -80,22 +124,29 @@ async function main() {
   const action = args.shift();
   if (action === 'list') return list();
   if (!['no-release', 'release', 'clear'].includes(action)) fail(`Unknown action ${action}\n\n${HELP}`);
-  let reason;
+  const opts = { reason: undefined, versions: [], allVersions: false };
   const refs = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--reason') reason = args[++i];
+    if (args[i] === '--reason') opts.reason = args[++i];
+    else if (args[i] === '--version') opts.versions.push(args[++i]);
+    else if (args[i] === '--all-versions') opts.allVersions = true;
     else if (args[i].startsWith('-')) fail(`Unknown option ${args[i]}`);
     else refs.push(args[i]);
   }
   if (!refs.length) fail('Give at least one commit hash');
+  if (opts.allVersions && opts.versions.length) fail('Use either --version or --all-versions');
+  const vs = versions();
   for (const ref of refs) {
     const c = await resolve(ref);
+    const where = scopes(opts, c, action);
+    const what = `${c.hash.slice(0, 9)} ${c.mod}: ${c.subject}`;
     if (action === 'clear') {
-      clearMark(c.hash);
-      console.log(`Cleared the mark of ${c.hash.slice(0, 9)} ${c.mod}: ${c.subject}`);
+      if (where) where.forEach(scope => clearMark(c.hash, scope));
+      else clearMark(c.hash, null);
+      console.log(`Cleared the marks of ${what}${where ? ` on ${where.map(s => versionName(vs, s)).join(', ')}` : ''}`);
     } else {
-      setMark(c.hash, { release: action === 'release', subject: c.subject, mod: c.mod, reason });
-      console.log(`Marked ${c.hash.slice(0, 9)} ${c.mod}: ${c.subject} as ${action === 'release' ? 'needing a release' : 'needing no release'}`);
+      for (const scope of where) setMark(c.hash, { release: action === 'release', subject: c.subject, mod: c.mod, reason: opts.reason, scope });
+      console.log(`Marked ${what} as ${action === 'release' ? 'needing a release' : 'needing no release'} on ${where.map(s => versionName(vs, s)).join(', ')}`);
     }
   }
 }
