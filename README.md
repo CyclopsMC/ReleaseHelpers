@@ -135,7 +135,7 @@ cc-dashboard open
 - Every 2 minutes it asks GitHub what changed, and fetches only those checkouts, like `cc-status`. Once an hour it fetches everything. Without a GitHub token, it fetches everything every 10 minutes. It doesn't fetch the checkouts of a mod while a release chain for that mod runs.
 - **Refresh** asks GitHub and fetches right away; Shift-click fetches every checkout.
 - Click a cell to see its commits: the unreleased ones, the ones to upmerge, and the ones the filter left out (with the reason). Click a commit for its message, files and diff.
-- **Marking commits**: hover a commit and click **No release** (e.g. a build change that touched a source file), or **Needs release** on one the filter left out. **Unmark** undoes it. This is the same as `cc-mark`, so it applies to all MC versions.
+- **Marking commits**: click **No release** next to a commit (e.g. a build change that touched a source file), or **Needs release** on one the filter left out, then choose whether it is for the version of the cell or for all versions. **Unmark** undoes it. These are the same marks as `cc-mark` makes.
 - **Release chains**: **Start release chain** opens a terminal with `cc-release-chain <mod>`, and **Rehearse** with `--rehearse`. **Ask before each push** adds `--confirm`. **Terminal** and **IDE** open the checkout of the selected version.
 - Running chains show their step in the table, e.g. `26-lts: building`, or `waiting for you` when they ask something, wait for your editor, or run Claude interactively.
 - Mods are ordered by their dependencies (by `<mod>_version` properties, as in `cc-release-chain`), and say which ones they wait for: dependencies with changes to release or a running chain.

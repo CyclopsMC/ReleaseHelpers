@@ -210,19 +210,30 @@ test('picks up marks made with cc-mark', async () => {
   assert.match(JSON.stringify(s.mods.find(m => m.name === 'ModA').cells[0].unreleased.dropped), /marked as no release/);
 });
 
-test('marks commits from the page', async () => {
+test('marks commits from the page, for one version or all of them', async () => {
   const hash = sb.git(sb.path('mc20-lts', 'ModA'), 'log', '-1', '--format=%H', '--grep=^Fix crash').trim();
-  let r = await post('/api/mark', { mod: 'ModA', hash: hash.slice(0, 9), release: false });
+  const mark = (release, scope) => post('/api/mark', { mod: 'ModA', hash: hash.slice(0, 9), release, scope });
+  // For 1.20 only: 1.21 still has it to upmerge.
+  let r = await mark(false, 'master-1.20-lts');
   assert.strictEqual(r.status, 200, r.body);
+  assert.deepStrictEqual(texts(await state(), 'ModA'), ['.', '↑1']);
+  const dropped = (await state()).mods.find(m => m.name === 'ModA').cells[0].unreleased.dropped.find(c => c.hash === hash);
+  assert.strictEqual(dropped.marked, 'master-1.20-lts');
+  assert.strictEqual((await mark(false, '*')).status, 200);
   assert.deepStrictEqual(texts(await state(), 'ModA'), ['.', '.']);
-  const marks = JSON.parse(sb.read(sb.path('marks.json')));
-  assert.strictEqual(marks.commits[hash].release, false);
-  assert.strictEqual(marks.commits[hash].reason, 'marked in cc-dashboard');
-  r = await post('/api/mark', { mod: 'ModA', hash, release: null });
-  assert.strictEqual(r.status, 200, r.body);
+  const marks = JSON.parse(sb.read(sb.path('marks.json'))).commits[hash].marks;
+  assert.deepStrictEqual(Object.keys(marks).sort(), ['*', 'master-1.20-lts']);
+  assert.strictEqual(marks['master-1.20-lts'].reason, 'marked in cc-dashboard');
+
+  // Unmarking removes the mark of one scope.
+  assert.strictEqual((await mark(null, '*')).status, 200);
+  assert.deepStrictEqual(texts(await state(), 'ModA'), ['.', '↑1']);
+  assert.strictEqual((await mark(null, 'master-1.20-lts')).status, 200);
   assert.deepStrictEqual(texts(await state(), 'ModA'), ['1', '↑1']);
-  assert.strictEqual((await post('/api/mark', { mod: 'Nope', hash, release: false })).status, 400);
-  assert.strictEqual((await post('/api/mark', { mod: 'ModA', hash: 'abc', release: false })).status, 400);
+
+  assert.strictEqual((await mark(false, 'master-1.19-lts')).status, 400);
+  assert.strictEqual((await post('/api/mark', { mod: 'Nope', hash, release: false, scope: '*' })).status, 400);
+  assert.strictEqual((await post('/api/mark', { mod: 'ModA', hash: 'abc', release: false, scope: '*' })).status, 400);
 });
 
 test('starts release chains and tools in a terminal', async () => {

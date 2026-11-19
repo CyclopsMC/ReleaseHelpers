@@ -3,7 +3,7 @@
 
 const path = require('path');
 const { gitOrNull } = require('./git');
-const { setMark, clearMark } = require('./marks');
+const { ALL, setMark, clearMark } = require('./marks');
 const { terminalCommand, ideCommand, launch, shellQuote } = require('./terminal');
 
 const HASH = /^[0-9a-f]{7,40}$/;
@@ -31,9 +31,11 @@ function createActions(monitor, { launcher = launch } = {}) {
   };
 
   return {
-    // { mod, hash, release: true | false | null }; null clears the mark.
-    async mark({ mod, hash, release }) {
+    // { mod, hash, release: true | false | null, scope: <branch> | '*' }; null clears the mark of
+    // that scope.
+    async mark({ mod, hash, release, scope }) {
       if (!HASH.test(String(hash))) throw badRequest('Bad commit hash');
+      if (scope !== ALL && !monitor.config.versions.some(v => v.branch === scope)) throw badRequest(`Unknown version ${scope}`);
       let commit = null;
       for (const dir of monitor.modDirs(knownMod(mod))) {
         const out = await gitOrNull(dir, ['show', '-s', '--format=%H%x1f%s', `${hash}^{commit}`]);
@@ -44,8 +46,8 @@ function createActions(monitor, { launcher = launch } = {}) {
         }
       }
       if (!commit) throw badRequest(`Commit ${hash} not found in ${mod}`);
-      if (release === null || release === undefined) clearMark(commit.full);
-      else setMark(commit.full, { release: !!release, subject: commit.subject, mod, reason: 'marked in cc-dashboard' });
+      if (release === null || release === undefined) clearMark(commit.full, scope);
+      else setMark(commit.full, { release: !!release, subject: commit.subject, mod, reason: 'marked in cc-dashboard', scope });
       monitor.reload();
       await monitor.request('local');
       return { ok: true, hash: commit.full };

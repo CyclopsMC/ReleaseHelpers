@@ -420,10 +420,11 @@ main { padding: 20px 24px 40px; max-width: 1200px; }
 .ci-bad { color: var(--danger); font-weight: 600; }
 .ci-run { color: var(--accent); }
 
-.commit-line { position: relative; display: flex; align-items: center; }
+.commit-line { display: flex; align-items: center; }
 .commit-line .commit-head { flex: 1; min-width: 0; }
-/* Shown over the end of the line on hover, so it doesn't narrow the subject. */
-.commit-line .mark { position: absolute; right: 10px; top: 6px; opacity: 0; box-shadow: -14px 0 12px 2px var(--surface-2); }
-.commit-line:hover .mark, .commit-line .mark:focus { opacity: 1; }
-.commit-line .mark.marked { position: static; flex: none; margin-right: 10px; opacity: 1; box-shadow: none; }
-@media (hover: none) { .commit-line .mark { opacity: 1; } }
+/* Always there, but quiet until you point at the commit. */
+.commit-line .mark { flex: none; margin-right: 10px; color: var(--muted); }
+.commit-line:hover .mark, .commit-line .mark:focus, .commit-line .mark.marked { color: var(--text); }
+.mark-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 10px; }
+.mark-choice .hint { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
+.btn.ghost { border-color: transparent; background: none; color: var(--muted); }

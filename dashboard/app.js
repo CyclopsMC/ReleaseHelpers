@@ -309,40 +309,58 @@ function renderDiff(text) {
   }));
 }
 
-// The mark button of a commit: what clicking it would do.
-function markButton(mod, c, dropped) {
-  let label;
-  let release;
-  let title;
+const versionOf = branch => (state.versions.find(v => v.branch === branch) || { name: branch }).name;
+const scopeText = scope => (scope === '*' ? 'all versions' : versionOf(scope));
+
+// Marking a commit asks for which versions; this is the commit that is asking, if any.
+let choosing = null; // { key, release }
+
+// The mark button of a commit, for the selected version: what clicking it would do.
+function markButton(mod, c, dropped, version) {
+  const key = `mark/${mod.name}/${c.hash}/${version.branch}`;
+  if (busy.has(key)) return h('span.mark-choice', null, h('span.spinner'));
   if (c.marked) {
-    label = 'Unmark';
-    release = null;
-    title = dropped ? 'You marked this as needing no release. Click to undo.' : 'You marked this as needing a release. Click to undo.';
-  } else if (dropped) {
-    label = 'Needs release';
-    release = true;
-    title = 'The filter left this out. Mark it as needing a release anyway.';
-  } else {
-    label = 'No release';
-    release = false;
-    title = "Mark this as needing no release, e.g. a build change that touched a source file. Applies to all MC versions.";
+    return h('button.btn.small.mark.marked', {
+      title: `Removes your mark for ${scopeText(c.marked)}`,
+      onclick: () => act(key, '/api/mark', { mod: mod.name, hash: c.hash, release: null, scope: c.marked }),
+    }, 'Unmark');
   }
-  const key = `mark/${c.hash}`;
-  return h(c.marked ? 'button.btn.small.mark.marked' : 'button.btn.small.mark', {
-    title,
-    disabled: busy.has(key),
-    onclick: () => act(key, '/api/mark', { mod: mod.name, hash: c.hash, release }),
-  }, busy.has(key) ? '…' : label);
+  const release = !!dropped;
+  const open = choosing && choosing.key === key;
+  return h(open ? 'button.btn.small.mark.marked' : 'button.btn.small.mark', {
+    title: release ? 'The filter left this out. Mark it as needing a release anyway.' : 'Mark this as needing no release',
+    'aria-expanded': open ? 'true' : 'false',
+    onclick: () => {
+      choosing = open ? null : { key };
+      renderPanel();
+    },
+  }, release ? 'Needs release' : 'No release');
 }
 
-function commitRow(mod, c, dropped) {
+// Below the commit, after clicking its mark button: for which versions.
+function markChoice(mod, c, dropped, version) {
+  const key = `mark/${mod.name}/${c.hash}/${version.branch}`;
+  if (!choosing || choosing.key !== key) return null;
+  const release = !!dropped;
+  const mark = scope => () => {
+    choosing = null;
+    act(key, '/api/mark', { mod: mod.name, hash: c.hash, release, scope });
+  };
+  return h('div.mark-choice', null,
+    h('span.hint', null, release ? 'Needs a release on' : 'Needs no release on'),
+    h('button.btn.small', { onclick: mark(version.branch), title: `Only for ${version.name}` }, version.name),
+    h('button.btn.small', { onclick: mark('*'), title: 'For every MC version, e.g. a build change that touched a source file' }, 'all versions'),
+    h('button.btn.small.ghost', { onclick: () => { choosing = null; renderPanel(); } }, 'Cancel'));
+}
+
+function commitRow(mod, c, dropped, version) {
   const key = commitKey(mod, c);
   const open = expanded.has(key);
   const badges = [];
   if (c.kind === 'translations') badges.push(h('span.badge.translations', null, 'translations'));
   if (c.kind === 'compat') badges.push(h('span.badge.compat', null, 'compat'));
-  if (dropped) badges.push(h(c.marked ? 'span.badge.marked' : 'span.badge', null, c.reason));
-  else if (c.marked) badges.push(h('span.badge.marked', null, c.marked === '*' ? 'marked as release' : 'marked as release on this version'));
+  if (c.marked) badges.push(h('span.badge.marked', null, `${dropped ? 'no release' : 'release'} on ${scopeText(c.marked)}`));
+  else if (dropped) badges.push(h('span.badge', null, c.reason));
   const head = h('button.commit-head', {
     'aria-expanded': open ? 'true' : 'false',
     onclick: () => {
@@ -354,9 +372,10 @@ function commitRow(mod, c, dropped) {
       renderPanel();
     },
   }, h('code.hash', null, c.hash.slice(0, 9)), h('span.subject', null, c.subject), badges);
-  const line = h('div.commit-line', null, head, markButton(mod, c, dropped));
+  const line = h('div.commit-line', null, head, markButton(mod, c, dropped, version));
+  const choice = markChoice(mod, c, dropped, version);
   const cls = dropped ? 'li.commit.dropped' : 'li.commit';
-  if (!open) return h(cls, null, line);
+  if (!open) return h(cls, null, line, choice);
 
   const d = details.get(key);
   let body;
@@ -373,7 +392,7 @@ function commitRow(mod, c, dropped) {
         mod.github ? h('a.btn.small', { href: `https://github.com/${mod.github}/commit/${d.hash}`, target: '_blank', rel: 'noopener' }, 'Open on GitHub') : null),
       diffs.has(key) ? (diff === null ? h('div', { style: 'margin-top: 10px' }, h('span.spinner')) : renderDiff(diff)) : null);
   }
-  return h(cls, null, line, body);
+  return h(cls, null, line, choice, body);
 }
 
 function chainPill(chain) {
@@ -423,9 +442,9 @@ function modActions(mod) {
       ch.waiting ? h('div', null, 'Waiting for you: ', h('b', null, ch.waiting)) : null)));
 }
 
-function section(mod, title, hint, commits, { dropped = false, collapsible = false, key = title } = {}) {
+function section(mod, version, title, hint, commits, { dropped = false, collapsible = false, key = title } = {}) {
   const list = commits.length
-    ? h('ul.commits', null, commits.map(c => commitRow(mod, c, dropped)))
+    ? h('ul.commits', null, commits.map(c => commitRow(mod, c, dropped, version)))
     : h('div.empty', null, 'None');
   if (collapsible) {
     const det = h('details.section', null, h('summary', null, `${title} · ${commits.length}`, h('span.hint', null, hint)), list);
@@ -479,11 +498,11 @@ function renderPanel() {
       cell.lastRelease ? ciLine(`${cell.lastRelease}:`, cell.releaseCi, mod.github ? `https://github.com/${mod.github}/releases/tag/${encodeURIComponent(cell.lastRelease)}` : null) : null].filter(Boolean);
     if (ci.length) content.push(h('div.meta.ci-row', null, ci));
     if (cell.local.length) content.push(h('div.alert', null, 'This checkout needs attention:', h('ul', null, cell.local.map(l => h('li', null, l)))));
-    if (cell.unreleased) content.push(section(mod, 'Unreleased', `since ${cell.lastRelease}`, cell.unreleased.userFacing));
+    if (cell.unreleased) content.push(section(mod, version, 'Unreleased', `since ${cell.lastRelease}`, cell.unreleased.userFacing));
     const lower = state.versions.slice(0, vi).map(v => v.name).join(', ');
-    if (vi > 0) content.push(section(mod, 'To upmerge', lower ? `from ${lower}` : '', cell.pending.userFacing));
+    if (vi > 0) content.push(section(mod, version, 'To upmerge', lower ? `from ${lower}` : '', cell.pending.userFacing));
     const dropped = (cell.unreleased ? cell.unreleased.dropped : []).concat(cell.pending.dropped);
-    content.push(section(mod, 'Left out by the filter', 'no release needed', dropped,
+    content.push(section(mod, version, 'Left out by the filter', 'no release needed', dropped,
       { dropped: true, collapsible: true, key: `${mod.name}/${version.name}/dropped` }));
     if (cell.otherDifferingTags.length) {
       content.push(h('div.note', null, `Older tags that differ from origin, which doesn't affect this status: ${cell.otherDifferingTags.join(', ')}.`));
