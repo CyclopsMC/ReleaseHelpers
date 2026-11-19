@@ -2,7 +2,7 @@
 // Changelog files: parsing, drafting from commits, and finalizing before release.
 
 const { git, gitOrNull, readBlobs } = require('./git');
-const { listCommits, classify } = require('./commits');
+const { listCommits, classify, withBranch } = require('./commits');
 const { readPropsAt } = require('./props');
 
 const SECTIONS = ['Additions', 'Changes', 'Fixes'];
@@ -141,8 +141,9 @@ async function mergedBeforeSince(cwd, tag, srcTags, since) {
 // Drafts the changelog of the next release: commits since `since` up to `head`.
 // Commits upmerged from `srcBranch` reuse the entries of the source release that contains them,
 // so manual edits made there carry over. Entries already released on this MC version are left out.
-// `filter` is the commit filter from the config (devOnlyPaths, marks).
-async function draftChangelog({ cwd, mc, since, head = 'HEAD', srcBranch = null, branch = 'this branch', header = [], filter = {}, comments = true }) {
+// `filter` is the commit filter from the config (devOnlyPaths, marks); marks for `branch` apply.
+async function draftChangelog({ cwd, mc, since, head = 'HEAD', srcBranch = null, branch = 'this branch', header = [], filter: configFilter = {}, comments = true }) {
+  const filter = withBranch(configFilter, branch);
   const commits = await listCommits(cwd, [`refs/tags/${since}..${head}`]);
   const srcRef = srcBranch ? `refs/remotes/origin/${srcBranch}` : null;
   const notes = [];

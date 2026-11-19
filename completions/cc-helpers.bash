@@ -22,8 +22,10 @@ _cc_mark() {
   COMPREPLY=()
   if [[ $COMP_CWORD -eq 1 ]]; then
     COMPREPLY=($(compgen -W "no-release release clear list" -- "$cur"))
+  elif [[ "${COMP_WORDS[COMP_CWORD-1]}" == "--version" ]]; then
+    COMPREPLY=($(compgen -W "$(cc-status --list-versions 2>/dev/null)" -- "$cur"))
   elif [[ "$cur" == -* ]]; then
-    COMPREPLY=($(compgen -W "--reason" -- "$cur"))
+    COMPREPLY=($(compgen -W "--version --all-versions --reason" -- "$cur"))
   fi
 }
 
