@@ -39,7 +39,13 @@ _cc_mark() {
     )
     _describe -t actions 'action' actions
   else
-    _arguments '--reason[why]:reason:' '*:commit:'
+    local -a versions
+    versions=(${(f)"$(cc-status --list-versions 2>/dev/null)"})
+    _arguments \
+      '--reason[why]:reason:' \
+      '*--version[an MC version the mark is for]:version:($versions)' \
+      '--all-versions[the mark is for all MC versions]' \
+      '*:commit:'
   fi
 }
 

@@ -5,7 +5,7 @@ const fs = require('fs');
 const { execFileSync } = require('child_process');
 const path = require('path');
 const { git, gitOrNull, runPool } = require('./git');
-const { listCommits, partition } = require('./commits');
+const { listCommits, partition, withBranch } = require('./commits');
 const { readPropsAt } = require('./props');
 const { githubRepo, githubToken, remoteRefs } = require('./github');
 
@@ -166,7 +166,9 @@ async function localIssues(repoDir, branch, remoteRef) {
 //   lastRelease: tag of the last release on this MC version, or null if there is none yet
 //   unreleased:  commits since lastRelease (null if no release yet)
 //   pending:     commits on lower maintained branches that this branch lacks
-async function cellStatus({ repoDir, version, lowerBranches, fetch, filter }) {
+async function cellStatus({ repoDir, version, lowerBranches, fetch, filter: configFilter }) {
+  // Marks for one version apply to this branch, also to commits still to upmerge into it.
+  const filter = withBranch(configFilter, version.branch);
   const clobbered = fetch ? await fetchBranches(repoDir, version.branch, lowerBranches) : [];
   const ref = `refs/remotes/origin/${version.branch}`;
   if (!(await refExists(repoDir, ref))) throw new Error(`origin/${version.branch} not found`);
