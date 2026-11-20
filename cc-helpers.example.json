@@ -1,0 +1,8 @@
+{
+  "versions": [
+    { "dir": "~/mc20-lts", "branch": "master-1.20-lts" },
+    { "dir": "~/mc21-lts", "branch": "master-1.21-lts" },
+    { "dir": "~/mc26-lts", "branch": "master-26-lts" },
+    { "dir": "~/mc26", "branch": "master-26" }
+  ]
+}
