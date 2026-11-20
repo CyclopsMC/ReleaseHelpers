@@ -23,7 +23,8 @@
   </button>
 </header>
 <div class="progress" id="progress"></div>
-<main>
+<main class="layout" id="layout">
+<div class="main-col">
   <div id="banner"></div>
   <div class="table-wrap"><table class="grid" id="grid"></table></div>
   <div class="groups" id="groups"></div>
@@ -34,6 +35,8 @@
     The marked cell of a row is where a release chain starts; a red dot means CI failed. Mods are ordered by their dependencies.
     Click a cell to see its commits, mark them, or start a release chain.
   </p>
+</div>
+<aside class="insights" id="insights" hidden></aside>
 </main>
 <aside class="panel" id="panel" hidden></aside>
 <script src="/app.js"></script>

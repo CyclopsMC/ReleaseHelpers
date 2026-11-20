@@ -138,6 +138,7 @@ function render() {
   renderGrid();
   renderGroups();
   renderProblems();
+  renderInsights();
   renderPanel();
 }
 
@@ -474,7 +475,9 @@ function renderPanel() {
   const cell = mod.cells[vi];
   const version = state.versions[vi];
   const content = [h('div.panel-head', null,
-    h('div', null, h('h2', null, mod.name), mod.github ? h('div.sub', null, h('a', { href: `https://github.com/${mod.github}`, target: '_blank', rel: 'noopener' }, mod.github)) : null),
+    h('div', null, h('h2', null, mod.name), h('div.platforms', null,
+      mod.github ? h('a', { href: `https://github.com/${mod.github}`, target: '_blank', rel: 'noopener' }, 'GitHub') : null,
+      platformLinks(mod.name))),
     h('button.btn.small.close', { onclick: () => select(null), title: 'Close (Esc)' }, 'Close'))];
   content.push(modActions(mod));
   if (mod.deps.length) {
@@ -557,6 +560,107 @@ $('#notify').addEventListener('click', async () => {
   }
   renderBar();
 });
+
+// --- Insights: downloads, releases and GitHub ---
+
+const compact = n => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)}M` : (n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n)));
+const full = n => (n === null || n === undefined ? '-' : n.toLocaleString('en-US'));
+
+function platformLinks(name) {
+  const d = state.insights && state.insights.downloads.mods.find(m => m.name === name);
+  if (!d) return null;
+  return [
+    d.urls.curseforge ? h('a', { href: d.urls.curseforge, target: '_blank', rel: 'noopener' }, 'CurseForge') : null,
+    d.urls.modrinth ? h('a', { href: d.urls.modrinth, target: '_blank', rel: 'noopener' }, 'Modrinth') : null,
+  ];
+}
+
+function renderInsights() {
+  const box = $('#insights');
+  const ins = state.insights;
+  $('#layout').classList.toggle('with-insights', !!ins);
+  box.hidden = !ins;
+  if (!ins) return;
+  const cards = [];
+  const dl = ins.downloads;
+  if (!dl.mods.length) {
+    cards.push(h('div.card', null, h('h3', null, 'Downloads'),
+      ins.running ? h('div', null, h('span.spinner'), ' Asking CurseForge and Modrinth…')
+        : h('p.note', null, 'No mod names its curseforge_project_id or modrinth_project_id in gradle.properties.')));
+  } else {
+    const total = m => (m.curseforge || 0) + (m.modrinth || 0);
+    const mods = dl.mods.slice().sort((a, b) => total(b) - total(a));
+    const max = Math.max(1, ...mods.map(total));
+    cards.push(h('div.card', null,
+      h('h3', null, 'Downloads', h('span.src', null, 'CurseForge + Modrinth, all time')),
+      h('div.kpis', null,
+        h('div.kpi', null, h('div.num', null, compact(dl.curseforge)), h('div.lbl', null, 'on CurseForge')),
+        h('div.kpi', null, h('div.num', null, compact(dl.modrinth)), h('div.lbl', null, 'on Modrinth'))),
+      mods.map(m => h('div.meter', {
+        title: `${m.name}: ${full(m.curseforge)} on CurseForge, ${full(m.modrinth)} on Modrinth${m.followers !== null ? `, ${m.followers} followers on Modrinth` : ''}`,
+      },
+      h('span.name', null, m.name),
+      h('div.track', null, h('div.fill', { style: `width: ${(total(m) / max) * 100}%` })),
+      h('span.val', null, compact(total(m))))),
+      ins.errors.length ? h('p.note.warn', { title: ins.errors.join('\n') }, `Some numbers are missing: ${ins.errors.length} request${ins.errors.length === 1 ? '' : 's'} failed (hover for details).`) : null,
+      ins.fetchedAt ? h('p.note', null, `Updated ${ago(ins.fetchedAt)}.`) : null));
+
+    const vmax = Math.max(1, ...ins.perVersion.map(v => v.downloads));
+    cards.push(h('div.card', null,
+      h('h3', null, 'Downloads per MC version', h('span.src', null, `last ${ins.recentDays} days`)),
+      ins.perVersion.map(v => h('div.meter', { title: `${v.name} (${v.mc}): ${full(v.downloads)} downloads of ${v.files} files published in the last ${ins.recentDays} days` },
+        h('span.name.mono', null, v.name),
+        h('div.track', null, h('div.fill', { style: `width: ${(v.downloads / vmax) * 100}%` })),
+        h('span.val', null, compact(v.downloads)))),
+      h('p.note', null, `Downloads of the files published in the last ${ins.recentDays} days, all mods. Helps decide which MC versions are still worth maintaining.`)));
+  }
+
+  if (ins.github) {
+    const mods = ins.github.mods.slice().sort((a, b) => (b.issues + b.prs) - (a.issues + a.prs));
+    const link = (m, kind, n) => (n ? h('a', { href: `https://github.com/${(state.mods.find(x => x.name === m.name) || {}).github}/${kind}`, target: '_blank', rel: 'noopener' }, String(n)) : '0');
+    cards.push(h('div.card', null,
+      h('h3', null, 'Open on GitHub', h('span.src', null, `${ins.github.issues} issues · ${ins.github.prs} PRs`)),
+      h('table.mini', null,
+        h('tr', null, h('th', null, ''), h('th.n', null, 'Issues'), h('th.n', null, 'PRs')),
+        mods.map(m => h('tr', null,
+          h('td', null, m.name),
+          h(m.issues ? 'td.n' : 'td.n.zero', null, link(m, 'issues', m.issues)),
+          h(m.prs ? 'td.n' : 'td.n.zero', null, link(m, 'pulls', m.prs)))))));
+  } else {
+    cards.push(h('div.card', null, h('h3', null, 'Open on GitHub'),
+      h('p.note', null, 'Needs a GitHub token: run gh auth login, or set GH_TOKEN.')));
+  }
+
+  if (ins.releases.length) {
+    const when = iso => {
+      const days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+      return days === 0 ? 'today' : `${days}d`;
+    };
+    const pub = {
+      yes: () => h('span.check', { title: 'On CurseForge and Modrinth' }, '✓'),
+      no: () => h('span.warn', { title: 'Missing on CurseForge or Modrinth' }, '✗'),
+      pending: () => h('span.unknown', { title: 'Not on both platforms yet; it may still be uploading' }, '…'),
+      unknown: () => h('span.unknown', { title: 'Not checked yet' }, '?'),
+    };
+    const latest = ins.latest;
+    cards.push(h('div.card', null,
+      h('h3', null, 'Recent releases', h('span.src', null, '✓ on CurseForge and Modrinth')),
+      h('table.mini.releases', null, ins.releases.map(r => {
+        const repo = (state.mods.find(x => x.name === r.mod) || {}).github;
+        return h('tr', null,
+          h('td.when', { title: new Date(r.date).toLocaleString() }, when(r.date)),
+          h('td', null, r.mod),
+          h('td.mono.tag', null, repo ? h('a', { href: `https://github.com/${repo}/releases/tag/${encodeURIComponent(r.tag)}`, target: '_blank', rel: 'noopener' }, r.tag) : r.tag),
+          h('td.n.pub', null, pub[r.published]()));
+      })),
+      latest.missing.length
+        ? h('p.note.warn', null, `Missing on CurseForge or Modrinth: ${latest.missing.map(m => `${m.mod} ${m.tag}`).join(', ')}.`)
+        : h('p.note', null, latest.unknown
+          ? `${latest.total - latest.unknown} of the ${latest.total} latest releases per version are on both CurseForge and Modrinth; the others aren't checked yet.`
+          : `All ${latest.total} latest releases per version are on both CurseForge and Modrinth.`)));
+  }
+  box.replaceChildren(...cards);
+}
 
 function connect() {
   const events = new EventSource('/api/events');

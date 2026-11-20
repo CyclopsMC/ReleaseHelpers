@@ -71,7 +71,10 @@ function repoQuery(alias, { owner, name, releases = [] }, health = false) {
   const headTarget = health ? `oid ${ROLLUP}` : 'oid';
   const releaseRefs = health ? releases.map((tag, i) => `
     release${i}: ref(qualifiedName: ${str(`refs/tags/${tag}`)}) { target { ... on Tag { target { ${ROLLUP} } } ${ROLLUP} } }`).join('') : '';
-  return `${alias}: repository(owner: ${str(owner)}, name: ${str(name)}) {
+  const counts = health ? `
+    openIssues: issues(states: OPEN) { totalCount }
+    openPullRequests: pullRequests(states: OPEN) { totalCount }` : '';
+  return `${alias}: repository(owner: ${str(owner)}, name: ${str(name)}) {${counts}
     heads: refs(refPrefix: "refs/heads/", first: 100) { nodes { name target { ${headTarget} } } }
     tags: refs(refPrefix: "refs/tags/", first: ${RECENT_TAGS}, orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) { nodes { name target { oid } } }${releaseRefs}
   }`;
@@ -81,7 +84,8 @@ function repoQuery(alias, { owner, name, releases = [] }, health = false) {
 const rollup = target => (target && target.statusCheckRollup ? target.statusCheckRollup.state : null);
 
 // Map "owner/name" -> { heads: Map branch -> oid, tags: [{ name, oid }] }, for the repos GitHub
-// knows. With `health`, also headStates (branch -> CI state) and releaseStates (tag -> CI state).
+// knows. With `health`, also headStates (branch -> CI state), releaseStates (tag -> CI state), and
+// the numbers of open issues and pull requests.
 // Throws if the request fails as a whole.
 async function remoteRefs(repos, token = githubToken(), { health = false } = {}) {
   const result = new Map();
@@ -105,6 +109,8 @@ async function remoteRefs(repos, token = githubToken(), { health = false } = {})
           const target = ref && ref.target && (ref.target.target || ref.target);
           return [tag, rollup(target)];
         }));
+        refs.openIssues = repo.openIssues ? repo.openIssues.totalCount : null;
+        refs.openPullRequests = repo.openPullRequests ? repo.openPullRequests.totalCount : null;
       }
       result.set(`${r.owner}/${r.name}`.toLowerCase(), refs);
     });

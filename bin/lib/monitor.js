@@ -11,6 +11,10 @@ const { marksPath } = require('./marks');
 const { modLockOwner } = require('./lock');
 const { githubRepo } = require('./github');
 const { readChains, chainsDir } = require('./progress');
+const { stateDir } = require('./lock');
+const { gitOrNull, runPool } = require('./git');
+const { readPropsAt } = require('./props');
+const { fetchPlatforms, summarize } = require('./insights');
 const {
   discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, isUpmergeOnly, modWork, cellText, originUrl,
 } = require('./status');
@@ -23,7 +27,13 @@ const DEFAULTS = {
   fetchAllInterval: 3600,
   // Without a GitHub token, fetching everything is the only way to see new commits.
   fetchAllWithoutGitHub: 600,
+  // Downloads and releases on CurseForge and Modrinth.
+  insightsInterval: 3600,
 };
+
+// A new release the platform data doesn't know yet is looked up again after this long.
+const NEW_RELEASE_RECHECK_MS = 15 * 60 * 1000;
+const insightsFile = () => path.join(stateDir(), 'insights.json');
 
 // Files in .git that change without affecting the status, or while git is still busy.
 const IGNORED_GIT_FILES = /(\.lock$|^FETCH_HEAD$|^COMMIT_EDITMSG$|^logs|^objects|^gc\.|\.tmp$)/;
@@ -83,6 +93,9 @@ class Monitor extends EventEmitter {
     // mod -> { heads: Map branch -> CI state, releases: Map tag -> CI state }, from the GitHub check.
     this.health = new Map();
     this.chains = {};
+    // mod -> what CurseForge and Modrinth have, see insights.js.
+    this.platforms = new Map();
+    this.insightsRunning = false;
   }
 
   opt(name) {
@@ -105,6 +118,11 @@ class Monitor extends EventEmitter {
       this.request('local');
     });
     every(this.opt('remoteInterval'), () => this.request('remote'));
+    if (this.insightsEnabled()) {
+      this.loadInsights();
+      this.refreshInsights();
+      every(this.opt('insightsInterval'), () => this.refreshInsights());
+    }
   }
 
   stop() {
@@ -160,6 +178,7 @@ class Monitor extends EventEmitter {
       this.busy = null;
       batch.forEach(b => b.resolve());
       this.changed();
+      this.recheckNewReleases();
     }
   }
 
@@ -183,7 +202,9 @@ class Monitor extends EventEmitter {
       this.info.github = plan ? (plan.error ? `error: ${plan.error}` : 'ok') : 'no token';
       if (plan && plan.error) this.log(`Couldn't ask GitHub what changed: ${plan.error}`);
       if (plan && !plan.error) {
-        for (const [mod, refs] of plan.refsByMod) this.health.set(mod, { heads: refs.headStates, releases: refs.releaseStates });
+        for (const [mod, refs] of plan.refsByMod) {
+          this.health.set(mod, { heads: refs.headStates, releases: refs.releaseStates, openIssues: refs.openIssues, openPullRequests: refs.openPullRequests });
+        }
       }
     }
     const planned = plan && !plan.error;
@@ -326,6 +347,104 @@ class Monitor extends EventEmitter {
     return checkouts(this.config, { mods: [mod], byVersion: this.found.byVersion }).map(c => c.repoDir);
   }
 
+  insightsEnabled() {
+    return !(this.config && this.config.dashboard && this.config.dashboard.insights === false);
+  }
+
+  loadInsights() {
+    try {
+      const saved = JSON.parse(fs.readFileSync(insightsFile(), 'utf8'));
+      for (const [mod, data] of Object.entries(saved.mods || {})) this.platforms.set(mod, data);
+    } catch (e) {
+      // Fetched below.
+    }
+  }
+
+  saveInsights() {
+    try {
+      fs.mkdirSync(stateDir(), { recursive: true });
+      const tmp = `${insightsFile()}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ mods: Object.fromEntries(this.platforms) }));
+      fs.renameSync(tmp, insightsFile());
+    } catch (e) {
+      this.log(`Can't save ${insightsFile()}: ${e.message}`);
+    }
+  }
+
+  // The MC version of each maintained version, as its checkouts say.
+  versionMcs() {
+    return (this.config ? this.config.versions : []).map((v, i) => {
+      const cell = Object.values(this.status).map(cells => cells[i]).find(c => c && c.mc);
+      return { name: v.name, mc: cell ? cell.mc : null };
+    });
+  }
+
+  // Fetches what CurseForge and Modrinth have of the mods (all of them, or `mods`). Only reads
+  // from the checkouts, so it can run next to the queue.
+  async refreshInsights(mods = null) {
+    if (!this.config || !this.insightsEnabled() || this.insightsRunning) return;
+    this.insightsRunning = true;
+    this.changed();
+    try {
+      const mcs = this.versionMcs().map(v => v.mc).filter(Boolean);
+      await runPool((mods || this.found.mods).map(mod => async () => {
+        const list = checkouts(this.config, { mods: [mod], byVersion: this.found.byVersion });
+        if (!list.length) return;
+        let props = {};
+        for (const c of list) {
+          props = await readPropsAt(c.repoDir, `refs/remotes/origin/${c.version.branch}`);
+          if (props.curseforge_project_id || props.modrinth_project_id) break;
+        }
+        const ids = { curseforge: props.curseforge_project_id, modrinth: props.modrinth_project_id };
+        if (!ids.curseforge && !ids.modrinth) {
+          this.platforms.delete(mod);
+          return;
+        }
+        // The recent tags, and the last release of every version.
+        const last = (this.status[mod] || []).map(c => c.lastRelease).filter(Boolean).map(t => `refs/tags/${t}`);
+        const out = await gitOrNull(list[0].repoDir, ['for-each-ref', '--sort=-creatordate', '--format=%(refname:strip=2)%09%(creatordate:iso-strict)', 'refs/tags']) || '';
+        const all = out.split('\n').filter(Boolean).map(l => {
+          const [tag, date] = l.split('\t');
+          return { tag, date };
+        }).filter(t => mcs.some(mc => t.tag.startsWith(`${mc}-`)));
+        const tags = all.filter((t, i) => i < 10 || last.includes(`refs/tags/${t.tag}`));
+        this.platforms.set(mod, await fetchPlatforms(ids, mcs, tags));
+      }), 4);
+      this.saveInsights();
+    } catch (e) {
+      this.log(`Insights failed: ${e.stack || e.message}`);
+    }
+    this.insightsRunning = false;
+    this.changed();
+  }
+
+  // A release the platform data doesn't know yet: look again once its upload had time.
+  recheckNewReleases() {
+    if (!this.insightsEnabled() || this.insightsRunning) return;
+    const due = [];
+    for (const [mod, data] of this.platforms) {
+      const known = new Set(data.tags.map(t => t.tag));
+      const fresh = Date.now() - Date.parse(data.fetchedAt) < NEW_RELEASE_RECHECK_MS;
+      if (!fresh && (this.status[mod] || []).some(c => c.lastRelease && !known.has(c.lastRelease))) due.push(mod);
+    }
+    if (due.length) this.refreshInsights(due);
+  }
+
+  insightsSnapshot() {
+    if (!this.insightsEnabled()) return null;
+    const mods = this.found.mods.map(name => {
+      const health = this.health.get(name);
+      return {
+        name,
+        platforms: this.platforms.get(name) || null,
+        github: health && health.openIssues !== null && health.openIssues !== undefined
+          ? { issues: health.openIssues, prs: health.openPullRequests || 0 } : null,
+        lastReleases: (this.status[name] || []).map(c => c.lastRelease).filter(Boolean),
+      };
+    });
+    return { running: this.insightsRunning, ...summarize(mods, this.versionMcs()) };
+  }
+
   snapshot() {
     const config = this.config;
     const versions = config ? config.versions.map(v => ({ name: v.name, branch: v.branch })) : [];
@@ -365,6 +484,7 @@ class Monitor extends EventEmitter {
       warnings: (this.configError ? [this.configError] : []).concat(config ? checkVersionDirs(config) : []),
       refresh: { running: this.busy, ...this.info },
       features: { terminal: !!dashboard.terminal || process.platform === 'darwin', ide: Array.isArray(dashboard.ide) },
+      insights: this.insightsSnapshot(),
     };
   }
 

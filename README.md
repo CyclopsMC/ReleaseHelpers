@@ -128,13 +128,23 @@ What you can do on it:
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
 - The tab title shows how many mods have work, e.g. `(3) CC status`.
 
+Next to the table (below it on narrow screens), cards show:
+
+- **Downloads** per mod on CurseForge and Modrinth, all time.
+- **Downloads per MC version**: of the files published in the last 90 days, all mods together. It shows which MC versions players still use, to decide which ones are worth maintaining. Your CI publishes a build on every push, so a version with many builds gets a small boost.
+- **Open on GitHub**: open issues and pull requests per mod, with links. These come with the GitHub check, so they need a GitHub token.
+- **Recent releases**, each with ✓ when it is on both CurseForge and Modrinth. Below them, it says whether the last release of every mod on every version is on both, so a release whose upload failed stands out. A release younger than 2 hours that isn't on both yet is shown as `…`, as it may still be uploading.
+
+The projects are the `curseforge_project_id` and `modrinth_project_id` in each mod's `gradle.properties`. CurseForge's own API needs a key, so the numbers come from [cfwidget](https://cfwidget.com/), like `cc-latest-curse` does, and from Modrinth's public API. They are fetched at start and every hour (a new release is looked up again after 15 minutes), and kept in `~/.cache/cc-helpers/insights.json`. The mod panel links to the mod on CurseForge and Modrinth.
+
 It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
 
 Optional settings under `"dashboard"` in the config:
 - `terminal`: where the buttons open terminals: `"Terminal"` (the default on macOS), `"iTerm"`, or a command where `{cmd}` is the command line to run, e.g. `["kitty", "sh", "-c", "{cmd}; exec $SHELL"]`.
   The first time, macOS asks whether node may control Terminal (or iTerm); allow it.
 - `ide`: a command to open a checkout, where `{dir}` is its path, e.g. `["idea", "{dir}"]` or `["open", "-a", "IntelliJ IDEA", "{dir}"]`. Without it, there is no IDE button.
-- `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600) and `fetchAllWithoutGitHub` (600).
+- `insights`: `false` to leave out the cards, so nothing is asked of CurseForge and Modrinth.
+- `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600), `fetchAllWithoutGitHub` (600) and `insightsInterval` (3600).
 
 `"github": false` at the top level of the config stops it from asking GitHub; it then fetches everything every 10 minutes.
 

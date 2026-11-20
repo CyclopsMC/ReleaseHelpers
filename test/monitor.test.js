@@ -46,7 +46,12 @@ before(async () => {
         const name = r.slice(prefix.length);
         return { name, target: { oid, statusCheckRollup: { state: states[name] } } };
       });
-      const repo = { heads: { nodes: nodes('refs/heads/') }, tags: { nodes: nodes('refs/tags/').map(n => ({ name: n.name, target: { oid: n.target.oid } })) } };
+      const repo = {
+        heads: { nodes: nodes('refs/heads/') },
+        tags: { nodes: nodes('refs/tags/').map(n => ({ name: n.name, target: { oid: n.target.oid } })) },
+        openIssues: { totalCount: 3 },
+        openPullRequests: { totalCount: 1 },
+      };
       for (const m of query.matchAll(/(release\d+): ref\(qualifiedName: "refs\/tags\/([^"]+)"\)/g)) {
         repo[m[1]] = { target: { target: { statusCheckRollup: { state: states[m[2]] } } } };
       }
@@ -76,6 +81,9 @@ test('shows the CI state of branches and releases, and fetches only what changed
     // It asked for the last releases it knew of.
     assert.match(queries[0], /release0: ref\(qualifiedName: "refs\/tags\/1\.20\.1-1\.0\.0"\)/);
     assert.strictEqual(monitor.info.github, 'ok');
+    // The same request counts the open issues and pull requests.
+    assert.match(queries[0], /openIssues: issues\(states: OPEN\) \{ totalCount \}/);
+    assert.deepStrictEqual(monitor.snapshot().insights.github, { mods: [{ name: 'ModG', issues: 3, prs: 1 }], issues: 3, prs: 1 });
 
     // Nothing changed on origin: nothing to fetch.
     await monitor.request('remote');
