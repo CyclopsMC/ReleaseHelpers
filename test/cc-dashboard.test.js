@@ -247,12 +247,13 @@ test('starts release chains and tools in a terminal', async () => {
   // The tools are started, but may not have written their log yet.
   const logLines = name => (fs.existsSync(sb.path(name)) ? sb.read(sb.path(name)).trim().split('\n') : []);
   await waitFor(() => logLines('fake-terminal.log').length === 3 && logLines('fake-ide.log').length === 1, 'the terminal and IDE to start');
-  // The chain starts in the checkout of its first version.
-  assert.deepStrictEqual(logLines('fake-terminal.log'), [
+  // The chain starts in the checkout of its first version. Each terminal is its own process, so
+  // their lines can come in any order.
+  assert.deepStrictEqual(logLines('fake-terminal.log').sort(), [
     `cd '${dir20}' && '${chainBin}' 'ModA'`,
     `cd '${dir20}' && '${chainBin}' --rehearse --confirm 'ModA'`,
     `cd '${sb.path('mc21-lts', 'ModA')}'`,
-  ]);
+  ].sort());
   assert.deepStrictEqual(logLines('fake-ide.log'), [sb.path('mc21-lts', 'ModB')]);
 });
 
