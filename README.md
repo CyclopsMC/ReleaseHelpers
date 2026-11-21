@@ -129,7 +129,7 @@ What you can do on it:
 - **Release chains**: **Start release chain** opens a terminal with `cc-release-chain <mod>`, and **Rehearse** with `--rehearse`. **Ask before each push** adds `--confirm`. **Terminal** and **IDE** open the checkout of the selected version.
 - Running chains show their step in the table, e.g. `26-lts: building`, or `waiting for you` when they ask something, wait for your editor, or run Claude interactively.
 - Mods are ordered by their dependencies (by `<mod>_version` properties, as in `cc-release-chain`), and say which ones they wait for: dependencies with changes to release or a running chain.
-- With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links.
+- With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links. Only GitHub Actions counts, by the latest run of each workflow that a push started: other checks, like Coveralls, and scheduled or issue workflows are left out.
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
 - It follows your system's light or dark mode; the button next to the bell switches to light, dark, or back to the system (remembered in that browser).
 - Mods show their icon from Modrinth or CurseForge, downloaded once to `~/.cache/cc-helpers/icons/`. The fonts (IBM Plex, SIL Open Font License) ship with the dashboard, so it works offline.

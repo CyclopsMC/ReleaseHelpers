@@ -33,18 +33,40 @@ before(async () => {
     { dir: sb.path('mc21-lts'), branch: 'master-1.21-lts' },
   ] }));
 
-  // CI fails on the 1.20 branch and for the 1.21 release.
-  const states = { 'master-1.20-lts': 'FAILURE', 'master-1.21-lts': 'SUCCESS', '1.20.1-1.0.0': 'SUCCESS', '1.21.1-2.0.0': 'FAILURE' };
+  // Both commits fail by their combined state, the 1.21 one only by a check outside GitHub Actions.
+  const c20 = sb.git(w, 'rev-parse', 'master-1.20-lts').trim();
+  const c21 = sb.git(w, 'rev-parse', 'master-1.21-lts').trim();
+  const rollups = { [c20]: 'FAILURE', [c21]: 'FAILURE' };
+  const run = (workflow, event, conclusion, createdAt) => ({ status: 'COMPLETED', conclusion, createdAt, workflowRun: { event, workflow: { name: workflow } } });
+  // GitHub Actions runs per commit, in pages.
+  const suites = {
+    [c20]: [[run('CI', 'push', 'FAILURE', '2026-11-01T10:00:00Z')]],
+    // CI failed on the push of the branch, passed on the push of the tag; a scheduled job failed later.
+    [c21]: [
+      [run('CI', 'push', 'FAILURE', '2026-11-02T10:00:00Z'), { status: 'QUEUED', conclusion: null, createdAt: '2026-11-02T10:00:00Z', workflowRun: null }],
+      [run('CI', 'push', 'SUCCESS', '2026-11-02T10:05:00Z'), run('Crowdin', 'schedule', 'FAILURE', '2026-11-03T03:00:00Z')],
+    ],
+  };
   server = http.createServer((req, res) => {
     let body = '';
     req.on('data', d => { body += d; });
     req.on('end', () => {
       const { query } = JSON.parse(body);
       queries.push(query);
-      const refs = sb.git(sb.path('origin', 'ModG.git'), 'for-each-ref', '--format=%(refname) %(objectname)').trim().split('\n').map(l => l.split(' '));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (/checkSuites/.test(query)) {
+        const data = {};
+        for (const m of query.matchAll(/(c\d+): repository\([^)]*\) \{\s*object\(oid: "(\w+)"\) \{ \.\.\. on Commit \{ checkSuites\(first: 100(?:, after: "(\d+)")?/g)) {
+          const pages = suites[m[2]] || [[]];
+          const page = m[3] ? Number(m[3]) : 0;
+          data[m[1]] = { object: { checkSuites: { pageInfo: { hasNextPage: page + 1 < pages.length, endCursor: String(page + 1) }, nodes: pages[page] } } };
+        }
+        return res.end(JSON.stringify({ data }));
+      }
+      const refs = sb.git(sb.path('origin', 'ModG.git'), 'for-each-ref', '--format=%(refname) %(objectname) %(*objectname)').trim().split('\n').map(l => l.split(' '));
       const nodes = prefix => refs.filter(([r]) => r.startsWith(prefix)).map(([r, oid]) => {
         const name = r.slice(prefix.length);
-        return { name, target: { oid, statusCheckRollup: { state: states[name] } } };
+        return { name, target: { oid, statusCheckRollup: { state: rollups[oid] } } };
       });
       const repo = {
         heads: { nodes: nodes('refs/heads/') },
@@ -52,10 +74,11 @@ before(async () => {
         openIssues: { totalCount: 3 },
         openPullRequests: { totalCount: 1 },
       };
-      for (const m of query.matchAll(/(release\d+): ref\(qualifiedName: "refs\/tags\/([^"]+)"\)/g)) {
-        repo[m[1]] = { target: { target: { statusCheckRollup: { state: states[m[2]] } } } };
+      for (const m of query.matchAll(/(release\d+): ref\(qualifiedName: "(refs\/tags\/[^"]+)"\)/g)) {
+        // An annotated tag, and its commit.
+        const [, tagOid, oid] = refs.find(([r]) => r === m[2]);
+        repo[m[1]] = { target: { oid: tagOid, target: { oid, statusCheckRollup: { state: rollups[oid] } } } };
       }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ data: { r0: repo } }));
     });
   });
@@ -77,7 +100,13 @@ test('shows the CI state of branches and releases, and fetches only what changed
     await monitor.request('local');
     await monitor.request('remote');
     const cells = monitor.snapshot().mods.find(m => m.name === 'ModG').cells;
-    assert.deepStrictEqual(cells.map(c => [c.ci, c.releaseCi]), [['FAILURE', 'SUCCESS'], ['SUCCESS', 'FAILURE']]);
+    // Only GitHub Actions counts: the latest run of each workflow that a push started.
+    assert.deepStrictEqual(cells.map(c => [c.ci, c.releaseCi]), [['FAILURE', 'FAILURE'], ['SUCCESS', 'SUCCESS']]);
+    // Once per failing commit, and the next page where there is one.
+    const suiteQueries = () => queries.filter(q => /checkSuites/.test(q));
+    assert.strictEqual(suiteQueries().length, 2);
+    assert.strictEqual((suiteQueries()[0].match(/object\(oid:/g) || []).length, 2);
+    assert.match(suiteQueries()[1], /after: "1"/);
     // It asked for the last releases it knew of.
     assert.match(queries[0], /release0: ref\(qualifiedName: "refs\/tags\/1\.20\.1-1\.0\.0"\)/);
     assert.strictEqual(monitor.info.github, 'ok');
@@ -85,9 +114,11 @@ test('shows the CI state of branches and releases, and fetches only what changed
     assert.match(queries[0], /openIssues: issues\(states: OPEN\) \{ totalCount \}/);
     assert.deepStrictEqual(monitor.snapshot().insights.github, { mods: [{ name: 'ModG', issues: 3, prs: 1 }], issues: 3, prs: 1 });
 
-    // Nothing changed on origin: nothing to fetch.
+    // Nothing changed on origin: nothing to fetch, and the Actions states are still known.
     await monitor.request('remote');
     assert.strictEqual(monitor.info.fetched.count, 0);
+    assert.strictEqual(suiteQueries().length, 2);
+    assert.deepStrictEqual(monitor.snapshot().mods.find(m => m.name === 'ModG').cells.map(c => c.ci), ['FAILURE', 'SUCCESS']);
 
     // A new commit on origin: only those checkouts are fetched.
     const w = sb.path('work', 'ModG');
@@ -101,4 +132,14 @@ test('shows the CI state of branches and releases, and fetches only what changed
   } finally {
     monitor.stop();
   }
+});
+
+test('sums up GitHub Actions runs', () => {
+  const { actionsState } = require('../bin/lib/github');
+  const run = (event, status, conclusion) => ({ status, conclusion, createdAt: '2026-11-01T10:00:00Z', workflowRun: { event, workflow: { name: 'CI' } } });
+  assert.strictEqual(actionsState([]), null);
+  assert.strictEqual(actionsState([run('schedule', 'COMPLETED', 'FAILURE')]), null);
+  assert.strictEqual(actionsState([run('push', 'IN_PROGRESS', null)]), 'PENDING');
+  assert.strictEqual(actionsState([run('push', 'COMPLETED', 'SKIPPED')]), 'SUCCESS');
+  assert.strictEqual(actionsState([run('push', 'COMPLETED', 'CANCELLED')]), 'FAILURE');
 });

@@ -9,6 +9,10 @@ const { execFileSync } = require('child_process');
 const BATCH = 40;
 const TIMEOUT_MS = 15000;
 const RECENT_TAGS = 10;
+// The GitHub Actions app.
+const ACTIONS_APP_ID = 15368;
+const SUITE_PAGES = 5;
+const ACTIONS_CACHE_MS = 10 * 60000;
 
 function apiUrl() {
   return process.env.CC_HELPERS_GITHUB_API || 'https://api.github.com/graphql';
@@ -64,7 +68,7 @@ function post(url, token, body) {
 
 const str = s => JSON.stringify(String(s));
 
-const ROLLUP = '... on Commit { statusCheckRollup { state } }';
+const ROLLUP = '... on Commit { oid statusCheckRollup { state } }';
 
 // With `health`, also the CI state of each branch head, and of the `releases` tags.
 function repoQuery(alias, { owner, name, releases = [] }, health = false) {
@@ -83,12 +87,92 @@ function repoQuery(alias, { owner, name, releases = [] }, health = false) {
 // SUCCESS, FAILURE, ERROR, PENDING or EXPECTED; null without checks.
 const rollup = target => (target && target.statusCheckRollup ? target.statusCheckRollup.state : null);
 
+// The GitHub Actions runs on a commit, a page at a time.
+function suitesQuery(alias, { owner, name, oid }, after = null) {
+  const page = after ? `, after: ${str(after)}` : '';
+  return `${alias}: repository(owner: ${str(owner)}, name: ${str(name)}) {
+    object(oid: ${str(oid)}) { ... on Commit { checkSuites(first: 100${page}, filterBy: {appId: ${ACTIONS_APP_ID}}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { status conclusion createdAt workflowRun { event workflow { name } } }
+    } } }
+  }`;
+}
+
+const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED', 'CANCELLED']);
+
+// The CI state from the latest run of each workflow that a push started; null if none did.
+// Scheduled and issue workflows don't count.
+function actionsState(suites) {
+  const latest = new Map();
+  for (const s of suites) {
+    if (!s.workflowRun || s.workflowRun.event !== 'push') continue;
+    const workflow = s.workflowRun.workflow ? s.workflowRun.workflow.name : '';
+    const seen = latest.get(workflow);
+    if (!seen || Date.parse(s.createdAt) > Date.parse(seen.createdAt)) latest.set(workflow, s);
+  }
+  const runs = [...latest.values()];
+  if (!runs.length) return null;
+  if (runs.some(s => FAILED.has(s.conclusion))) return 'FAILURE';
+  if (runs.some(s => s.status !== 'COMPLETED')) return 'PENDING';
+  return 'SUCCESS';
+}
+
+// oid -> { state, at }
+const actionsCache = new Map();
+
+// Map oid -> Actions state, for commits [{ owner, name, oid }]. A commit GitHub can't answer for
+// is left out.
+async function actionsStates(commits, token) {
+  const now = Date.now();
+  const states = new Map();
+  const todo = [];
+  for (const c of commits) {
+    const hit = actionsCache.get(c.oid);
+    if (hit && now - hit.at < ACTIONS_CACHE_MS) states.set(c.oid, hit.state);
+    else todo.push({ ...c, suites: [], after: null });
+  }
+  let pending = todo;
+  for (let page = 0; page < SUITE_PAGES && pending.length; page++) {
+    const next = [];
+    for (let i = 0; i < pending.length; i += BATCH) {
+      const batch = pending.slice(i, i + BATCH);
+      const query = `query {\n${batch.map((c, j) => suitesQuery(`c${j}`, c, c.after)).join('\n')}\n}`;
+      const json = await post(apiUrl(), token, { query });
+      batch.forEach((c, j) => {
+        const repo = json.data && json.data[`c${j}`];
+        const suites = repo && repo.object && repo.object.checkSuites;
+        if (!suites) {
+          c.failed = true;
+          return;
+        }
+        c.suites.push(...suites.nodes);
+        if (suites.pageInfo.hasNextPage) {
+          c.after = suites.pageInfo.endCursor;
+          next.push(c);
+        }
+      });
+    }
+    pending = next;
+  }
+  for (const c of todo) {
+    if (c.failed) continue;
+    const state = actionsState(c.suites);
+    states.set(c.oid, state);
+    // A run that is still going is asked for again next time.
+    if (state !== 'PENDING') actionsCache.set(c.oid, { state, at: now });
+  }
+  return states;
+}
+
 // Map "owner/name" -> { heads: Map branch -> oid, tags: [{ name, oid }] }, for the repos GitHub
 // knows. With `health`, also headStates (branch -> CI state), releaseStates (tag -> CI state), and
 // the numbers of open issues and pull requests.
+// CI states only count GitHub Actions: a commit that fails by other checks, like a Coveralls
+// status, is looked at again with actionsStates.
 // Throws if the request fails as a whole.
 async function remoteRefs(repos, token = githubToken(), { health = false } = {}) {
   const result = new Map();
+  const failing = [];
   for (let i = 0; i < repos.length; i += BATCH) {
     const batch = repos.slice(i, i + BATCH);
     const query = `query {\n${batch.map((r, j) => repoQuery(`r${j}`, r, health)).join('\n')}\n}`;
@@ -102,18 +186,40 @@ async function remoteRefs(repos, token = githubToken(), { health = false } = {})
         tags: repo.tags.nodes.map(n => ({ name: n.name, oid: n.target.oid })),
       };
       if (health) {
-        refs.headStates = new Map(repo.heads.nodes.map(n => [n.name, rollup(n.target)]));
-        refs.releaseStates = new Map((r.releases || []).map((tag, i) => {
+        // [name, commit] of the heads, and of the releases.
+        const heads = repo.heads.nodes.map(n => [n.name, n.target]);
+        const releases = (r.releases || []).map((tag, i) => {
           const ref = repo[`release${i}`];
           // Annotated tags point to a Tag, whose target is the commit.
-          const target = ref && ref.target && (ref.target.target || ref.target);
-          return [tag, rollup(target)];
-        }));
+          return [tag, ref && ref.target && (ref.target.target || ref.target)];
+        });
+        for (const [, commit] of [...heads, ...releases]) {
+          if (commit && ['FAILURE', 'ERROR'].includes(rollup(commit))) failing.push({ owner: r.owner, name: r.name, oid: commit.oid });
+        }
+        refs.headStates = heads;
+        refs.releaseStates = releases;
         refs.openIssues = repo.openIssues ? repo.openIssues.totalCount : null;
         refs.openPullRequests = repo.openPullRequests ? repo.openPullRequests.totalCount : null;
       }
       result.set(`${r.owner}/${r.name}`.toLowerCase(), refs);
     });
+  }
+  if (health) {
+    const unique = [...new Map(failing.map(c => [c.oid, c])).values()];
+    let actions = new Map();
+    try {
+      actions = await actionsStates(unique, token);
+    } catch (e) {
+      // Without an answer, the combined state stands.
+    }
+    const state = commit => {
+      if (!commit) return null;
+      return actions.has(commit.oid) ? actions.get(commit.oid) : rollup(commit);
+    };
+    for (const refs of result.values()) {
+      refs.headStates = new Map(refs.headStates.map(([name, commit]) => [name, state(commit)]));
+      refs.releaseStates = new Map(refs.releaseStates.map(([tag, commit]) => [tag, state(commit)]));
+    }
   }
   return result;
 }
@@ -133,4 +239,4 @@ async function graphql(query, variables = {}, token = githubToken()) {
   return json.data;
 }
 
-module.exports = { githubRepo, githubToken, graphql, remoteRefs, repoQuery };
+module.exports = { githubRepo, githubToken, graphql, remoteRefs, repoQuery, suitesQuery, actionsState };
