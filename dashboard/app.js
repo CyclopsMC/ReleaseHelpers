@@ -182,7 +182,7 @@ function renderBar() {
   bell.title = notifyOn() ? 'Notifications are on: new work, CI failures and chains that wait for you. Click to turn off.' : 'Turn on notifications';
   // Only translations can wait, so they don't count as work here.
   const work = (counts.todo || 0) + (counts.upmerge || 0);
-  document.title = work ? `(${work}) CC status` : 'CC status';
+  document.title = work ? `(${work}) CC Dashboard` : 'CC Dashboard';
   setFavicon(loading ? 'loading' : (errors || failing ? 'problem' : (work ? 'work' : 'ok')));
 
   const r = state.refresh;

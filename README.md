@@ -133,7 +133,7 @@ What you can do on it:
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
 - It follows your system's light or dark mode; the button next to the bell switches to light, dark, or back to the system (remembered in that browser).
 - Mods show their icon from Modrinth or CurseForge, downloaded once to `~/.cache/cc-helpers/icons/`. The fonts (IBM Plex, SIL Open Font License) ship with the dashboard, so it works offline.
-- The tab title shows how many mods need a release or an upmerge, e.g. `(3) CC status`. The tab icon is green when none do (translations alone don't count), orange when some do, and red on errors or failing CI.
+- The tab title shows how many mods need a release or an upmerge, e.g. `(3) CC Dashboard`. The tab icon is green when none do (translations alone don't count), orange when some do, and red on errors or failing CI.
 
 Next to the table (below it on narrow screens), cards show:
 
