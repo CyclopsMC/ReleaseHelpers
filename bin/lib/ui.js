@@ -4,7 +4,9 @@
 const readline = require('readline');
 const { spawnSync } = require('child_process');
 
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+// FORCE_COLOR keeps colors when the output is not a terminal, e.g. piped through tee.
+const forceColor = !!process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0';
+const useColor = (process.stdout.isTTY || forceColor) && !process.env.NO_COLOR;
 const paint = code => s => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
 const colors = {
   bold: paint('1'),
@@ -12,6 +14,7 @@ const colors = {
   red: paint('31'),
   green: paint('32'),
   yellow: paint('33'),
+  magenta: paint('35'),
   cyan: paint('36'),
 };
 

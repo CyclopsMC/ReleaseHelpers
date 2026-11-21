@@ -425,3 +425,23 @@ test('passes the prompt to the default Claude commands so that they read it', ()
   assert.match(log(), /^claude -p mc21-lts: Was the upmerge in last commit correct\?/m);
   assert.doesNotMatch(r.out + r.err, /The Claude review failed/);
 });
+
+test("shows Claude's review in its own color", () => {
+  setup();
+  const config = JSON.parse(sb.read(sb.path('cc-helpers.json')));
+  const review = sb.path('tools', 'review-talks');
+  sb.write(review, '#!/bin/sh\necho "Looks right."\necho "Verdict: fine"\necho "a warning" >&2\n');
+  fs.chmodSync(review, 0o755);
+  config.claude.review = [review];
+  sb.write(sb.path('cc-helpers.json'), JSON.stringify(config));
+  const r = chain(['moda'], 'y\n\n\n', { FORCE_COLOR: '1', NO_COLOR: '' });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const magenta = text => new RegExp(`\\x1b\\[35m[^\\x1b]*${text}`);
+  assert.match(r.out, magenta('Looks right\\.\\nVerdict: fine'));
+  assert.match(r.err, magenta('a warning'));
+  // The chain's own lines around it keep their colors.
+  assert.doesNotMatch(r.out, magenta('Asking Claude'));
+  assert.doesNotMatch(r.out, magenta('Claude changed nothing'));
+  assert.ok(r.out.indexOf('Asking Claude') < r.out.indexOf('Verdict: fine'));
+  assert.ok(r.out.indexOf('Verdict: fine') < r.out.indexOf('Claude changed nothing'));
+});
