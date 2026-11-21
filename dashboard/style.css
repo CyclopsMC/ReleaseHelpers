@@ -7,6 +7,9 @@
   --faint: #b9b9bf;
   --border: #e3e3de;
   --accent: #2f6feb;
+  /* GitHub's colors for project board columns. */
+  --gh-gray: #59636e; --gh-blue: #0969da; --gh-green: #1a7f37; --gh-yellow: #9a6700;
+  --gh-orange: #bc4c00; --gh-red: #d1242f; --gh-pink: #bf3989; --gh-purple: #8250df;
   --release-bg: #fff1cc;
   --release-fg: #7a4f00;
   --release-ring: #f0c254;
@@ -36,6 +39,8 @@
     --faint: #55555c;
     --border: #2e2e33;
     --accent: #6ea0ff;
+    --gh-gray: #9198a1; --gh-blue: #4493f8; --gh-green: #3fb950; --gh-yellow: #d29922;
+    --gh-orange: #db6d28; --gh-red: #f85149; --gh-pink: #db61a2; --gh-purple: #ab7df8;
     --release-bg: #3b2e10;
     --release-fg: #f6c65b;
     --release-ring: #9a7424;
@@ -483,3 +488,9 @@ main { padding: 20px 24px 40px; }
 .items .unreleased, .board-items .unreleased { color: var(--release-fg); }
 .items .title a, .board-items .title a { color: var(--text); }
 .items .title a:hover, .board-items .title a:hover { color: var(--accent); }
+
+/* A status color, like GitHub draws it: a ring with a light fill. */
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; box-sizing: border-box;
+  border: 2px solid var(--dot); background: color-mix(in srgb, var(--dot) 22%, transparent); }
+.gh-gray { --dot: var(--gh-gray); } .gh-blue { --dot: var(--gh-blue); } .gh-green { --dot: var(--gh-green); } .gh-yellow { --dot: var(--gh-yellow); }
+.gh-orange { --dot: var(--gh-orange); } .gh-red { --dot: var(--gh-red); } .gh-pink { --dot: var(--gh-pink); } .gh-purple { --dot: var(--gh-purple); }

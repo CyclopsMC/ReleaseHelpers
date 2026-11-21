@@ -139,7 +139,7 @@ The projects are the `curseforge_project_id` and `modrinth_project_id` in each m
 
 With `dashboard.projects` set to GitHub project boards, a card per board shows above those:
 
-- Its open items per status column, the furthest along first, each with its mod and a link. Done items (the last status, or a closed issue) are only counted.
+- Its open items per status column, the furthest along first, each with its mod and a link. Columns get the color they have on GitHub. Done items (the last status, or a closed issue) are only counted.
 - **Done, not released yet**: done items that a commit not released yet closes (`Closes #12`, or the `(#34)` of a merged pull request), with the versions still to release them on.
 - The panel of a mod lists its open items on the boards.
 

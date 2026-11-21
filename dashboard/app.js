@@ -600,12 +600,15 @@ function renderInsights() {
 const external = (href, ...children) => h('a', { href, target: '_blank', rel: 'noopener' }, ...children);
 const versionList = names => names.join(', ');
 
+// The color GitHub shows for a status, as a ring before its name.
+const statusDot = color => (color ? h('span', { class: `dot gh-${String(color).toLowerCase()}`, 'aria-hidden': 'true' }) : null);
+
 // One project board item: its title, then the mod, number and whether its fix is released.
 function boardItem(i, { status = false } = {}) {
   return h('li', null,
     h('div.title', null, i.url ? external(i.url, i.title) : i.title),
     h('div.meta', null,
-      status && i.status ? h('span.status', null, i.status) : null,
+      status && i.status ? h('span.status', null, statusDot(i.statusColor), i.status) : null,
       [i.mod, i.number ? `#${i.number}` : null, i.kind === 'pr' ? 'PR' : null, i.kind === 'draft' ? 'draft' : null].filter(Boolean).join(' '),
       i.unreleased.length ? h('span.unreleased', { title: 'A commit that closes it is not released on these versions yet' }, `not released on ${versionList(i.unreleased)}`) : null));
 }
@@ -621,7 +624,7 @@ function projectCards(p) {
     return h('div.card.board', null,
       h('h3', null, external(b.url, b.title), h('span.src', null, `${b.open} open`)),
       b.columns.map(c => h('div.column', null,
-        h('div.colhead', null, c.name || 'No status', h('span.count', null, String(c.count))),
+        h('div.colhead', null, h('span', null, statusDot(c.color), c.name || 'No status'), h('span.count', null, String(c.count))),
         h('ul.items', null, c.items.map(i => boardItem(i))),
         c.count > c.items.length ? external(b.url, `${c.count - c.items.length} more on the board`) : null)),
       b.unreleased.length ? h('div.column', null,

@@ -26,7 +26,7 @@ const query = user => `query($owner: String!, $number: Int!, $after: String) {
     projectV2(number: $number) {
       title
       url
-      status: field(name: "Status") { ... on ProjectV2SingleSelectField { options { name } } }
+      status: field(name: "Status") { ... on ProjectV2SingleSelectField { options { name color } } }
       items(first: ${PAGE}, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -46,7 +46,8 @@ const query = user => `query($owner: String!, $number: Int!, $after: String) {
   }
 }`;
 
-// { title, url, statuses: [name], items: [{ status, kind, number, title, url, state, repo, labels }] }
+// { title, url, statuses: [name], colors: { status: color }, items: [{ status, kind, number, title, url, state, repo, labels }] }
+// Colors are GitHub's names for them: GRAY, BLUE, GREEN, YELLOW, ORANGE, RED, PINK or PURPLE.
 async function fetchProject(project) {
   let after = null;
   let result = null;
@@ -55,7 +56,8 @@ async function fetchProject(project) {
     const board = data.owner && data.owner.projectV2;
     if (!board) throw new Error(`No project ${project.number} of ${project.owner}`);
     if (!result) {
-      result = { title: board.title, url: board.url, statuses: board.status ? board.status.options.map(o => o.name) : [], items: [] };
+      const options = board.status ? board.status.options : [];
+      result = { title: board.title, url: board.url, statuses: options.map(o => o.name), colors: Object.fromEntries(options.map(o => [o.name, o.color])), items: [] };
     }
     for (const n of board.items.nodes) {
       if (n.isArchived || !n.content) continue;
@@ -127,11 +129,12 @@ function summarizeProjects(boards, mods, { perColumn = 6 } = {}) {
       };
     });
     // Active columns, the furthest along first; items without a status last.
+    const colorOf = name => (data.colors && name !== null && data.colors[name]) || null;
     const names = data.statuses.filter(s => s !== done).reverse();
     if (items.some(i => !i.done && !i.status)) names.push(null);
     const columns = names.map(name => {
       const list = items.filter(i => !i.done && i.status === name);
-      return { name, count: list.length, items: list.slice(0, perColumn) };
+      return { name, color: colorOf(name), count: list.length, items: list.slice(0, perColumn) };
     }).filter(c => c.count);
     // For a mod's panel: the furthest along first, then no status, then done but not released.
     const rank = i => {
@@ -141,7 +144,7 @@ function summarizeProjects(boards, mods, { perColumn = 6 } = {}) {
     };
     const forPanel = items.filter(x => x.mod && (!x.done || x.unreleased.length)).sort((a, b) => rank(a) - rank(b));
     for (const i of forPanel) {
-      (perMod[i.mod] = perMod[i.mod] || []).push({ project: data.title, status: i.status, done: i.done, kind: i.kind, number: i.number, title: i.title, url: i.url, unreleased: i.unreleased });
+      (perMod[i.mod] = perMod[i.mod] || []).push({ project: data.title, status: i.status, statusColor: colorOf(i.status), done: i.done, kind: i.kind, number: i.number, title: i.title, url: i.url, unreleased: i.unreleased });
     }
     return {
       spec,

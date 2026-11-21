@@ -10,6 +10,8 @@ const { parseProject, fetchProject, commitRefs, summarizeProjects } = require('.
 
 const props = (mc, mod) => `mod_version=${mod}\nminecraft_version=${mc}\n`;
 const STATUSES = ['Todo', 'In Progress', 'Done'];
+// GitHub's defaults for a new board.
+const COLORS = { Todo: 'GREEN', 'In Progress': 'YELLOW', Done: 'PURPLE' };
 const issue = (number, title, status, extra = {}) => ({
   isArchived: false,
   status: status ? { name: status } : null,
@@ -69,7 +71,7 @@ before(async () => {
       res.end(JSON.stringify({ data: { owner: { projectV2: {
         title: 'Maintenance',
         url: 'https://github.com/orgs/Test/projects/3',
-        status: { options: STATUSES.map(name => ({ name })) },
+        status: { options: STATUSES.map(name => ({ name, color: COLORS[name] })) },
         items: { pageInfo: { hasNextPage: page === 0, endCursor: page === 0 ? 'c1' : null }, nodes: PAGES[page] },
       } } } }));
     });
@@ -107,6 +109,7 @@ test('reads every page of a board, and skips archived items', async () => {
   const board = await fetchProject({ owner: 'Test', number: 3, user: false });
   assert.strictEqual(board.title, 'Maintenance');
   assert.deepStrictEqual(board.statuses, STATUSES);
+  assert.deepStrictEqual(board.colors, COLORS);
   assert.deepStrictEqual(board.items.map(i => i.number || i.title), [1, 2, 3, 7, 8, 9, 'An idea']);
   assert.strictEqual(board.items.find(i => i.number === 3).state, 'CLOSED');
   assert.strictEqual(board.items.find(i => i.title === 'An idea').kind, 'draft');
@@ -130,13 +133,14 @@ test('sums up a board: active columns furthest first, and fixes that are not rel
   ] }];
   const { projects: [b], perMod } = summarizeProjects([{ spec: 'x', data, error: null }], mods, { perColumn: 1 });
   // Done is the last status; a closed issue is done whatever its column.
-  assert.deepStrictEqual(b.columns.map(c => [c.name, c.count, c.items.map(i => i.number || i.title)]),
-    [['In Progress', 1, [1]], ['Todo', 2, [2]], [null, 1, [9]]]);
+  // Each column keeps the color it has on GitHub.
+  assert.deepStrictEqual(b.columns.map(c => [c.name, c.color, c.count, c.items.map(i => i.number || i.title)]),
+    [['In Progress', 'YELLOW', 1, [1]], ['Todo', 'GREEN', 2, [2]], [null, null, 1, [9]]]);
   assert.deepStrictEqual([b.open, b.done], [4, 3]);
   assert.deepStrictEqual(b.unreleased.map(i => [i.number, i.unreleased]), [[7, ['1.21-lts', '26']]]);
   // The panel: furthest along first, done but not released last; an open item notes its unreleased fix.
-  assert.deepStrictEqual(perMod.ModP.map(i => [i.number, i.status, i.unreleased]),
-    [[1, 'In Progress', ['1.21-lts']], [2, 'Todo', []], [9, null, []], [7, 'Done', ['1.21-lts', '26']]]);
+  assert.deepStrictEqual(perMod.ModP.map(i => [i.number, i.status, i.statusColor, i.unreleased]),
+    [[1, 'In Progress', 'YELLOW', ['1.21-lts']], [2, 'Todo', 'GREEN', []], [9, null, null, []], [7, 'Done', 'PURPLE', ['1.21-lts', '26']]]);
 });
 
 test('shows the boards of the config, with the commits that are not released yet', async () => {
