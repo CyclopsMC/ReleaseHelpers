@@ -4,7 +4,7 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-mark`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
@@ -64,4 +64,35 @@ For the commits the filter can't tell apart, e.g. a build change that also touch
   In a mod checkout, it is for that checkout's version unless you say otherwise. `--version` can be given more than once, and `--all-versions` marks it for every version (a mark for one version wins over that).
   `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes its marks (or only those of `--version`), and `cc-mark list` shows them all.
   Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash and branch. Upmerges keep hashes, so a mark for 26-lts also applies while the commit is still waiting to be upmerged into 26-lts.
+
+## Changelog drafts
+
+`cc-changelog <patch|minor|major>` starts from a draft made by `cc-changelog-draft`:
+
+```text
+As always, don't forget to backup your world before updating!
+Requires CyclopsCore version 1.31.0 or higher.
+
+# Draft made by cc-changelog-draft: review every entry. Lines starting with # are removed on release.
+Additions:
+# from 1.21.1-1.39.0
+* Add Expressions support to the Logic Programmer (#1766)
+
+Changes:
+
+Fixes:
+# from 1.21.1-1.39.0
+* Fix non-ticking parts not re-attaching to network after chunk reloads (#1786), Closes #1785
+# only on master-26-lts
+* Fix labels not being saved in singleplayer (#1784)
+
+# Left out:
+#   39a62925b Make battery-related game tests more robust (only dev files)
+```
+
+- Commits upmerged from the branch in `../.upmerge-src-branch` reuse the entries of the source release that contains them.
+- Other commits are drafted from their message: `Closes #x`-style lines are folded into the entry, the rest of the body is indented, and the section is picked from the first word (Fix, Remove, ... go to Fixes; Add, Allow, Show, ... to Additions; the rest to Changes).
+- `Bump compat version` commits contribute the entries listed in their message, and translation commits become "Add translations through Crowdin".
+- Entries that are already in an earlier changelog of the same MC version are left out (e.g. backports).
+- `# ...` lines say where each group of entries comes from, and list what was left out and why.
 

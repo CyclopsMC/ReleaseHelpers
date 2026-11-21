@@ -15,6 +15,8 @@ mcversion=$(cc-param minecraft)
 ccversion=$(cc-param cyclops)
 prev=$mcversion-$(cc-param mod)
 if [[ "$type" != "init" ]]; then
+    # Draft before bumping, so a failure leaves nothing changed
+    draft=$(cc-changelog-draft --since "$prev")
     cc-bump $type
 fi
 curr=$(cc-param mod)
@@ -27,27 +29,16 @@ if [ -f $file ]; then
     exit 1
 fi
 
-touch $file
-echo "As always, don't forget to backup your world before updating!" >> $file
-if [ "$ccversion" != "" ]; then
-    echo "Requires CyclopsCore version $ccversion or higher." >> $file
-fi
-
 if [[ "$type" == "init" ]]; then
+    echo "As always, don't forget to backup your world before updating!" >> $file
+    if [ "$ccversion" != "" ]; then
+        echo "Requires CyclopsCore version $ccversion or higher." >> $file
+    fi
     echo "" >> $file
     echo "Initial $mcversion release" >> $file
 else
-    echo "" >> $file
-    echo "Additions:" >> $file
-    echo "" >> $file
-    echo "Changes:" >> $file
-    echo "" >> $file
-    echo "Fixes:" >> $file
-
-    echo "----- TODO: arrange -----" >> $file
-git log --no-merges --format="* %B" $prev..HEAD >> $file
+    printf '%s\n' "$draft" > $file
 fi
 git add $file
 
 open $file
-

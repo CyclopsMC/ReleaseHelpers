@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+'use strict';
+// Prints a draft changelog for the next release of the mod checkout in the current dir.
+
+const fs = require('fs');
+const path = require('path');
+const { gitOrNull } = require('./lib/git');
+const { readWorkingProps, cyclopsVersion } = require('./lib/props');
+const { draftChangelog } = require('./lib/changelog');
+const { loadConfig } = require('./lib/config');
+const { loadMarks } = require('./lib/marks');
+
+const HELP = `Usage: cc-changelog-draft [options]
+
+Prints a draft changelog for the next release of the current mod checkout.
+
+Commits upmerged from the branch in ../.upmerge-src-branch reuse the entries of the source
+release that contains them. Other commits are drafted from their messages. Entries that are
+already in an earlier changelog of this MC version are left out. Lines starting with # explain
+where entries come from and what was left out; cc-changelog-finalize removes them.
+
+Options:
+  --since <tag>       Last release to start from (default: <minecraft_version>-<mod_version>)
+  --source <branch>   Branch to carry entries over from, or "none" (default: ../.upmerge-src-branch)
+  --no-comments       Leave out the # lines
+  -h, --help          Show this help
+`;
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const opts = { since: null, source: undefined, comments: true };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--since' || a === '--source') {
+      if (argv[i + 1] === undefined) fail(`${a} needs a value`);
+      opts[a.slice(2)] = argv[++i];
+    } else if (a === '--no-comments') opts.comments = false;
+    else if (a === '-h' || a === '--help') {
+      process.stdout.write(HELP);
+      process.exit(0);
+    } else fail(`Unknown argument ${a}\n\n${HELP}`);
+  }
+  return opts;
+}
+
+function defaultSource(cwd) {
+  try {
+    return fs.readFileSync(path.join(cwd, '..', '.upmerge-src-branch'), 'utf8').trim() || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Without a config, your marks still apply.
+function commitFilter() {
+  try {
+    return loadConfig().commitFilter;
+  } catch (e) {
+    return { marks: loadMarks().commits };
+  }
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const cwd = process.cwd();
+  let props;
+  try {
+    props = readWorkingProps(cwd);
+  } catch (e) {
+    fail(e.message);
+  }
+  const mc = props.minecraft_version;
+  if (!mc || !props.mod_version) fail('Error: no minecraft_version or mod_version found');
+  const since = opts.since || `${mc}-${props.mod_version}`;
+  if (!(await gitOrNull(cwd, ['rev-parse', '-q', '--verify', `refs/tags/${since}`]))) {
+    fail(`Error: tag ${since} doesn't exist. Pass the last release with --since <tag>.`);
+  }
+  const source = opts.source === undefined ? defaultSource(cwd) : (opts.source === 'none' ? null : opts.source);
+  const branch = (await gitOrNull(cwd, ['symbolic-ref', '-q', '--short', 'HEAD'])) || 'this branch';
+  const cyclops = cyclopsVersion(props);
+  const header = ["As always, don't forget to backup your world before updating!"];
+  if (cyclops) header.push(`Requires CyclopsCore version ${cyclops} or higher.`);
+
+  process.stdout.write(await draftChangelog({
+    cwd, mc, since, srcBranch: source, branch, header, filter: commitFilter(), comments: opts.comments,
+  }));
+}
+
+main().catch(e => fail(e.stack || e.message));

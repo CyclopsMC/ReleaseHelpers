@@ -17,6 +17,9 @@ else
   propsfile="build.properties"
 fi
 
+# Remove draft comments and empty sections, and stop if the changelog isn't ready
+cc-changelog-finalize $file || exit 1
+
 cc-changelog-composite $mcversion
 
 git add $propsfile $file CHANGELOG-$mcversion.md CHANGELOG.md

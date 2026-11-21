@@ -6,6 +6,7 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const { git, gitOrNull, runPool } = require('./git');
 const { listCommits, partition, withBranch } = require('./commits');
+const { readPropsAt } = require('./props');
 const { githubRepo, githubToken, remoteRefs } = require('./github');
 
 const FETCH_TIMEOUT_MS = 120000;
@@ -95,23 +96,6 @@ function checkVersionDirs(config) {
     else if (src.trim() !== expected) warnings.push(`${file} says ${src.trim()}, but the version before it in the config is ${expected}`);
   });
   return warnings;
-}
-
-function parseProps(text) {
-  const props = {};
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*([^#!\s=:][^=:\s]*)\s*[=:]\s*(.*)$/.exec(line);
-    if (m) props[m[1]] = m[2].trim();
-  }
-  return props;
-}
-
-async function readPropsAt(repoDir, ref) {
-  for (const f of ['gradle.properties', 'build.properties']) {
-    const text = await gitOrNull(repoDir, ['show', `${ref}:${f}`]);
-    if (text !== null && /^mod_version\s*=/m.test(text)) return parseProps(text);
-  }
-  return {};
 }
 
 const CLOBBERED_TAG = /^! \[rejected\]\s+(\S+)\s+->\s+\S+\s+\(would clobber existing tag\)$/;
@@ -326,5 +310,6 @@ function cellText(cell, upmergeOnly) {
 }
 
 module.exports = {
-  discoverMods, checkVersionDirs, computeStatus, planFetches, chainStart, cellUserFacing, isUpmergeOnly, modWork, cellText, parseProps,
+  discoverMods, checkVersionDirs, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, modWork,
+  cellText, fetchBranches,
 };

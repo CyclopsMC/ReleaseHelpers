@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+'use strict';
+// Removes # comments and empty sections from a changelog, and checks it is ready for release.
+
+const fs = require('fs');
+const { finalizeChangelog } = require('./lib/changelog');
+
+const args = process.argv.slice(2);
+if (args.length !== 1 || args[0].startsWith('-')) {
+  process.stderr.write('Usage: cc-changelog-finalize <changelog-file>\n\n'
+    + 'Removes lines starting with # and empty sections, and fails if the changelog still has\n'
+    + 'a TODO marker, "Bump ... version" entries, merge conflict markers, or no entries.\n'
+    + 'The file is only changed when it passes.\n');
+  process.exit(args[0] === '-h' || args[0] === '--help' ? 0 : 1);
+}
+
+const file = args[0];
+let input;
+try {
+  input = fs.readFileSync(file, 'utf8');
+} catch (e) {
+  process.stderr.write(`Error: can't read ${file}\n`);
+  process.exit(1);
+}
+const { text, errors } = finalizeChangelog(input);
+if (errors.length) {
+  process.stderr.write(`Error: ${file} is not ready for release:\n${errors.map(e => `  - ${e}\n`).join('')}`);
+  process.exit(1);
+}
+if (text !== input) fs.writeFileSync(file, text);
