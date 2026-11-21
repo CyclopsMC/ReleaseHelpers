@@ -31,7 +31,6 @@ const DEFAULTS = {
   insightsInterval: 3600,
 };
 
-// A new release the platform data doesn't know yet is looked up again after this long.
 // A release the platform data doesn't know yet is looked up at once, but at most once a minute
 // per mod; a release that may still be uploading is looked up again every 10 minutes.
 const NEW_RELEASE_RECHECK_MS = 60 * 1000;
