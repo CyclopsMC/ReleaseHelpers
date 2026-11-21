@@ -44,6 +44,9 @@ const DEFAULT_REVIEW_COMMAND = ['claude', '-p', '--permission-mode', 'acceptEdit
 const DEFAULT_UPMERGE_COMMAND = ['claude', 'upmerge'];
 const DEFAULT_FIX_COMMAND = ['claude'];
 
+// The prompt goes after "--": options that take a list, like --allowedTools, would take it as a value.
+const withPrompt = (cmd, prompt) => [...cmd.slice(1), '--', prompt];
+
 class Abort extends Error {}
 
 function fail(message) {
@@ -288,7 +291,7 @@ async function buildUntilOk(ctx) {
       const prompt = `The build (${buildCommand(config).join(' ')}) fails on ${version.branch}`
         + `${ctx.lower ? ` after upmerging origin/${ctx.src}` : ''}. The full build log is at ${log}. `
         + "Fix it, but don't git commit. GRADLE_OPTS is already set for this Minecraft version, so don't change gradle.properties or ~/.gradle/gradle.properties.";
-      runWaiting(ctx, 'Claude, to fix the build', cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
+      runWaiting(ctx, 'Claude, to fix the build', cmd[0], withPrompt(cmd, prompt), { cwd: repo, env: buildEnv(version) });
       if (await isDirty(repo)) await commitChanges(ctx, 'Claude', 'Fix build');
     }
   }
@@ -305,7 +308,7 @@ async function review(ctx) {
   for (;;) {
     step(ctx, 'reviewing the upmerge');
     console.log('Asking Claude to review the upmerge...');
-    const code = run(cmd[0], [...cmd.slice(1), prompt], { cwd: repo, env: buildEnv(version) });
+    const code = run(cmd[0], withPrompt(cmd, prompt), { cwd: repo, env: buildEnv(version) });
     if (code === 0) break;
     const answer = await ui.choose('The Claude review failed.', [
       { key: 'r', label: '[r]etry', value: 'retry' },

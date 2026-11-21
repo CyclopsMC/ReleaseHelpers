@@ -46,9 +46,9 @@ Used by `cc-build` and `cc-release-chain` (all optional):
 - `notify`: whether to show a macOS notification when a release chain needs you after a long step. Default: `true`.
 - `claude`: the Claude commands, if you want to change them:
   - `upmerge`: for merge conflicts, default `["claude", "upmerge"]`.
-  - `review`: for reviewing clean upmerges headless, default `claude -p --permission-mode acceptEdits` with read, edit, `./gradlew` and read-only git tools allowed. The prompt is added as the last argument.
+  - `review`: for reviewing clean upmerges headless, default `claude -p --permission-mode acceptEdits` with read, edit, `./gradlew` and read-only git tools allowed. The prompt is added as the last argument, after `--`.
   - `reviewPrompt`: default "Was the upmerge in last commit correct? If not, fix it, but don't git commit it yet."
-  - `fix`: for fixing a failing build, default `["claude"]`.
+  - `fix`: for fixing a failing build, default `["claude"]`. The prompt is added the same way.
 
 ### Shell completion
 
