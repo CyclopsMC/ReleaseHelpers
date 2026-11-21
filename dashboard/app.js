@@ -44,6 +44,14 @@ function h(spec, attrs, ...children) {
   return el;
 }
 
+// An SVG element, for small icons.
+function svg(tag, attrs, ...children) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  el.append(...children);
+  return el;
+}
+
 async function post(url, body) {
   const r = await fetch(url, {
     method: 'POST',
@@ -636,28 +644,35 @@ function renderInsights() {
       const days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
       return days === 0 ? 'today' : `${days}d`;
     };
+    const clock = () => svg('svg', { viewBox: '0 0 16 16', class: 'clock', 'aria-hidden': 'true' },
+      svg('circle', { cx: 8, cy: 8, r: 6.2, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
+      svg('path', { d: 'M8 4.6V8l2.4 1.6', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round' }));
     const pub = {
       yes: () => h('span.check', { title: 'On CurseForge and Modrinth' }, '✓'),
       no: () => h('span.warn', { title: 'Missing on CurseForge or Modrinth' }, '✗'),
-      pending: () => h('span.unknown', { title: 'Not on both platforms yet; it may still be uploading' }, '…'),
+      pending: () => h('span.uploading', { title: 'Not on both platforms yet; it may still be uploading. Checked again every 10 minutes.' }, clock()),
       unknown: () => h('span.unknown', { title: 'Not checked yet' }, '?'),
     };
     const latest = ins.latest;
+    const latestNote = () => {
+      if (latest.missing.length) return h('p.note.warn', null, `Missing on CurseForge or Modrinth: ${latest.missing.map(m => `${m.mod} ${m.tag}`).join(', ')}.`);
+      const onBoth = latest.total - latest.pending - latest.unknown;
+      if (onBoth === latest.total) return h('p.note', null, `All ${latest.total} latest releases per version are on both CurseForge and Modrinth.`);
+      const rest = [latest.pending ? `${latest.pending} may still be uploading` : null, latest.unknown ? `${latest.unknown} not checked yet` : null];
+      return h('p.note', null, `${onBoth} of the ${latest.total} latest releases per version are on both CurseForge and Modrinth; ${rest.filter(Boolean).join(', ')}.`);
+    };
     cards.push(h('div.card', null,
       h('h3', null, 'Recent releases', h('span.src', null, '✓ on CurseForge and Modrinth')),
       h('table.mini.releases', null, ins.releases.map(r => {
         const repo = (state.mods.find(x => x.name === r.mod) || {}).github;
         return h('tr', null,
           h('td.when', { title: new Date(r.date).toLocaleString() }, when(r.date)),
-          h('td', null, r.mod),
-          h('td.mono.tag', null, repo ? h('a', { href: `https://github.com/${repo}/releases/tag/${encodeURIComponent(r.tag)}`, target: '_blank', rel: 'noopener' }, r.tag) : r.tag),
+          h('td', null,
+            h('div.mod', null, r.mod),
+            h('div.mono.tag', null, repo ? h('a', { href: `https://github.com/${repo}/releases/tag/${encodeURIComponent(r.tag)}`, target: '_blank', rel: 'noopener' }, r.tag) : r.tag)),
           h('td.n.pub', null, pub[r.published]()));
       })),
-      latest.missing.length
-        ? h('p.note.warn', null, `Missing on CurseForge or Modrinth: ${latest.missing.map(m => `${m.mod} ${m.tag}`).join(', ')}.`)
-        : h('p.note', null, latest.unknown
-          ? `${latest.total - latest.unknown} of the ${latest.total} latest releases per version are on both CurseForge and Modrinth; the others aren't checked yet.`
-          : `All ${latest.total} latest releases per version are on both CurseForge and Modrinth.`)));
+      latestNote()));
   }
   box.replaceChildren(...cards);
 }

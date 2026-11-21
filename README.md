@@ -133,9 +133,9 @@ Next to the table (below it on narrow screens), cards show:
 - **Downloads** per mod on CurseForge and Modrinth, all time.
 - **Downloads per MC version**: of the files published in the last 90 days, all mods together. It shows which MC versions players still use, to decide which ones are worth maintaining. Your CI publishes a build on every push, so a version with many builds gets a small boost.
 - **Open on GitHub**: open issues and pull requests per mod, with links. These come with the GitHub check, so they need a GitHub token.
-- **Recent releases**, each with ✓ when it is on both CurseForge and Modrinth. Below them, it says whether the last release of every mod on every version is on both, so a release whose upload failed stands out. A release younger than 2 hours that isn't on both yet is shown as `…`, as it may still be uploading.
+- **Recent releases**, each with ✓ when it is on both CurseForge and Modrinth. Below them, it says whether the last release of every mod on every version is on both, so a release whose upload failed stands out. A release younger than 2 hours that isn't on both yet gets a clock, as it may still be uploading.
 
-The projects are the `curseforge_project_id` and `modrinth_project_id` in each mod's `gradle.properties`. CurseForge's own API needs a key, so the numbers come from [cfwidget](https://cfwidget.com/), like `cc-latest-curse` does, and from Modrinth's public API. They are fetched at start and every hour (a new release is looked up again after 15 minutes), and kept in `~/.cache/cc-helpers/insights.json`. The mod panel links to the mod on CurseForge and Modrinth.
+The projects are the `curseforge_project_id` and `modrinth_project_id` in each mod's `gradle.properties`. CurseForge's own API needs a key, so the numbers come from [cfwidget](https://cfwidget.com/), like `cc-latest-curse` does, and from Modrinth's public API. They are fetched at start and every hour, a new release within a minute, and a release that may still be uploading again every 10 minutes, and kept in `~/.cache/cc-helpers/insights.json`. The mod panel links to the mod on CurseForge and Modrinth.
 
 It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
 

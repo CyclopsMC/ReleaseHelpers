@@ -101,7 +101,7 @@ test('counts downloads, per MC version of the last 90 days, and checks the relea
     { name: '1.21-lts', mc: '1.21.1', downloads: 500, files: 1 },
   ]);
   assert.deepStrictEqual(ins.releases.map(r => [r.tag, r.published]), [['1.21.1-2.0.0', 'no'], ['1.20.1-1.0.0', 'yes']]);
-  assert.deepStrictEqual(ins.latest, { total: 2, missing: [{ mod: 'ModA', tag: '1.21.1-2.0.0', published: 'no' }], unknown: 0 });
+  assert.deepStrictEqual(ins.latest, { total: 2, missing: [{ mod: 'ModA', tag: '1.21.1-2.0.0', published: 'no' }], pending: 0, unknown: 0 });
   assert.strictEqual(ins.github, null);
   // Kept for the next start.
   const saved = JSON.parse(fs.readFileSync(sb.path('state', 'insights.json'), 'utf8'));
@@ -144,6 +144,70 @@ test('a young release that is not on both platforms yet is pending, not missing'
     fetchedAt: '2026-11-20T11:30:00Z', curseforge: { total: 5, url: null }, modrinth: null, recent: {},
     tags: [{ tag: '1.21.1-1.0.1', date: '2026-11-20T11:00:00Z', curseforge: true, modrinth: false }], errors: [],
   } }], [{ name: '1.21-lts', mc: '1.21.1' }], now);
-  assert.deepStrictEqual(ins.latest, { total: 1, missing: [], unknown: 0 });
+  // Uploading, so neither on both nor missing.
+  assert.deepStrictEqual(ins.latest, { total: 1, missing: [], pending: 1, unknown: 0 });
   assert.deepStrictEqual(ins.github, { mods: [{ name: 'M', issues: 2, prs: 1 }], issues: 2, prs: 1 });
+});
+
+test('orders releases by time, also across UTC offsets', () => {
+  const now = Date.parse('2026-11-21T12:00:00Z');
+  const tag = (t, date) => ({ tag: t, date, curseforge: true, modrinth: true });
+  const ins = summarize([{ name: 'M', github: null, lastReleases: [], platforms: {
+    fetchedAt: '2026-11-21T11:00:00Z', curseforge: { total: 1, url: null }, modrinth: null, recent: {}, errors: [],
+    // 06:40 UTC in winter time comes after 06:37 UTC in summer time.
+    tags: [tag('1.21.1-1.0.0', '2026-10-10T08:37:00+02:00'), tag('26.1.2-1.0.0', '2026-10-10T07:40:00+01:00')],
+  } }], [], now);
+  assert.deepStrictEqual(ins.releases.map(r => r.tag), ['26.1.2-1.0.0', '1.21.1-1.0.0']);
+});
+
+test('looks up new releases at once, and again while they may still be uploading', async () => {
+  const { Monitor } = require('../bin/lib/monitor');
+  const monitor = new Monitor({ options: {} });
+  try {
+    monitor.reload();
+    await monitor.request('local');
+    const asked = [];
+    monitor.refreshInsights = mods => asked.push(mods);
+    const now = Date.parse('2026-11-21T12:00:00Z');
+    const data = (minutesAgo, tags) => ({ fetchedAt: new Date(now - minutesAgo * 60000).toISOString(), tags });
+    const released = (tag, minutesAgo, curseforge) => ({ tag, date: new Date(now - minutesAgo * 60000).toISOString(), curseforge, modrinth: true });
+    const known = [released('1.20.1-1.0.0', 900, true), released('1.21.1-2.0.0', 900, true)];
+
+    // A release the data doesn't know yet: at once, but not twice within a minute.
+    monitor.platforms.set('ModA', data(0.5, known.slice(0, 1)));
+    monitor.recheckNewReleases(now);
+    monitor.platforms.set('ModA', data(2, known.slice(0, 1)));
+    monitor.recheckNewReleases(now);
+    assert.deepStrictEqual(asked, [['ModA']]);
+
+    // On Modrinth but not yet on CurseForge: every 10 minutes, until 2 hours after the release.
+    asked.length = 0;
+    for (const [fetched, age] of [[5, 30], [11, 30], [11, 150]]) {
+      monitor.platforms.set('ModA', data(fetched, [known[0], released('1.21.1-2.0.0', age, false)]));
+      monitor.recheckNewReleases(now);
+    }
+    assert.deepStrictEqual(asked, [['ModA']]);
+
+    // Everything known and published: nothing to look up.
+    monitor.platforms.set('ModA', data(30, known));
+    monitor.recheckNewReleases(now);
+    assert.strictEqual(asked.length, 1);
+  } finally {
+    monitor.stop();
+  }
+});
+
+test('finds tags in every checkout of a mod', async () => {
+  // A tag only the 1.21 checkout has, like one a release chain just pushed from there.
+  sb.git(sb.path('mc21-lts', 'ModA'), 'tag', '-a', '-m', 'Release', '1.21.1-2.0.1');
+  const { Monitor } = require('../bin/lib/monitor');
+  const monitor = new Monitor({ options: {} });
+  try {
+    monitor.reload();
+    await monitor.request('local');
+    await monitor.refreshInsights();
+    assert.ok(monitor.platforms.get('ModA').tags.some(t => t.tag === '1.21.1-2.0.1'));
+  } finally {
+    monitor.stop();
+  }
 });

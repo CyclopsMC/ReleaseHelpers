@@ -115,7 +115,7 @@ function summarize(mods, versions, now = Date.now()) {
     prs: withGithub.reduce((n, m) => n + m.github.prs, 0),
   } : null;
   const releases = withPlatforms.flatMap(m => m.platforms.tags.map(t => ({ mod: m.name, tag: t.tag, date: t.date, published: publishState(t, t.date, now) })))
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
     .slice(0, 8);
   // The last release of every mod on every maintained version.
   const latest = withPlatforms.flatMap(m => m.lastReleases.map(tag => {
@@ -130,7 +130,12 @@ function summarize(mods, versions, now = Date.now()) {
     recentDays: RECENT_DAYS,
     github,
     releases,
-    latest: { total: latest.length, missing: latest.filter(l => l.published === 'no'), unknown: latest.filter(l => l.published === 'unknown').length },
+    latest: {
+      total: latest.length,
+      missing: latest.filter(l => l.published === 'no'),
+      pending: latest.filter(l => l.published === 'pending').length,
+      unknown: latest.filter(l => l.published === 'unknown').length,
+    },
     errors: withPlatforms.flatMap(m => m.platforms.errors.map(e => `${m.name}: ${e}`)),
   };
 }

@@ -14,7 +14,7 @@ const { readChains, chainsDir } = require('./progress');
 const { stateDir } = require('./lock');
 const { gitOrNull, runPool } = require('./git');
 const { readPropsAt } = require('./props');
-const { fetchPlatforms, summarize } = require('./insights');
+const { fetchPlatforms, summarize, publishState } = require('./insights');
 const {
   discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, isUpmergeOnly, modWork, cellText, originUrl,
 } = require('./status');
@@ -32,7 +32,10 @@ const DEFAULTS = {
 };
 
 // A new release the platform data doesn't know yet is looked up again after this long.
-const NEW_RELEASE_RECHECK_MS = 15 * 60 * 1000;
+// A release the platform data doesn't know yet is looked up at once, but at most once a minute
+// per mod; a release that may still be uploading is looked up again every 10 minutes.
+const NEW_RELEASE_RECHECK_MS = 60 * 1000;
+const UPLOADING_RECHECK_MS = 10 * 60 * 1000;
 const insightsFile = () => path.join(stateDir(), 'insights.json');
 
 // Files in .git that change without affecting the status, or while git is still busy.
@@ -402,11 +405,17 @@ class Monitor extends EventEmitter {
         }
         // The recent tags, and the last release of every version.
         const last = (this.status[mod] || []).map(c => c.lastRelease).filter(Boolean).map(t => `refs/tags/${t}`);
-        const out = await gitOrNull(list[0].repoDir, ['for-each-ref', '--sort=-creatordate', '--format=%(refname:strip=2)%09%(creatordate:iso-strict)', 'refs/tags']) || '';
-        const all = out.split('\n').filter(Boolean).map(l => {
-          const [tag, date] = l.split('\t');
-          return { tag, date };
-        }).filter(t => mcs.some(mc => t.tag.startsWith(`${mc}-`)));
+        // From every checkout: a chain pushes each tag from the checkout of its own version.
+        const byTag = new Map();
+        for (const c of list) {
+          const out = await gitOrNull(c.repoDir, ['for-each-ref', '--format=%(refname:strip=2)%09%(creatordate:iso-strict)', 'refs/tags']) || '';
+          for (const l of out.split('\n').filter(Boolean)) {
+            const [tag, date] = l.split('\t');
+            if (!byTag.has(tag)) byTag.set(tag, { tag, date });
+          }
+        }
+        const all = [...byTag.values()].filter(t => mcs.some(mc => t.tag.startsWith(`${mc}-`)))
+          .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
         const tags = all.filter((t, i) => i < 10 || last.includes(`refs/tags/${t.tag}`));
         this.platforms.set(mod, await fetchPlatforms(ids, mcs, tags));
       }), 4);
@@ -418,14 +427,16 @@ class Monitor extends EventEmitter {
     this.changed();
   }
 
-  // A release the platform data doesn't know yet: look again once its upload had time.
-  recheckNewReleases() {
+  // Looks up new releases, and again those that may still be uploading.
+  recheckNewReleases(now = Date.now()) {
     if (!this.insightsEnabled() || this.insightsRunning) return;
     const due = [];
     for (const [mod, data] of this.platforms) {
+      const age = now - Date.parse(data.fetchedAt);
       const known = new Set(data.tags.map(t => t.tag));
-      const fresh = Date.now() - Date.parse(data.fetchedAt) < NEW_RELEASE_RECHECK_MS;
-      if (!fresh && (this.status[mod] || []).some(c => c.lastRelease && !known.has(c.lastRelease))) due.push(mod);
+      const unseen = (this.status[mod] || []).some(c => c.lastRelease && !known.has(c.lastRelease));
+      const uploading = data.tags.some(t => publishState(t, t.date, now) === 'pending');
+      if ((unseen && age >= NEW_RELEASE_RECHECK_MS) || (uploading && age >= UPLOADING_RECHECK_MS)) due.push(mod);
     }
     if (due.length) this.refreshInsights(due);
   }
