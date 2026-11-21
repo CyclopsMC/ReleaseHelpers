@@ -197,7 +197,7 @@ It first shows the chain and asks to start, then does this for each version, in 
 2. **Upmerge** from the version below (`cc-upmerge`). On conflicts, it starts `claude upmerge`; exit Claude when it's done.
 3. **Build** with the version's `gradleOpts`, logging to `.git/cc-release-chain/build.log`.
    If it fails, it shows the end of the log and lets you retry, ask Claude to fix it, skip the build, or abort.
-4. **Review**: after a clean upmerge, Claude reviews it headless. If Claude changed files, you see the diff and choose to commit them (then it builds again) or revert them.
+4. **Review**: after a clean upmerge, Claude reviews it headless, with its output in magenta. If Claude changed files, you see the diff and choose to commit them (then it builds again) or revert them.
 5. **Changelog**: drafts it with `cc-changelog-draft` and opens it in your editor. When you close the editor, it is finalized like `cc-changelog-finalize` does; if that fails you can edit again, skip this version's release, or abort.
 6. **Bump**: you choose patch, minor or major for this version. The suggestion is minor when the changelog has Additions, else patch; what the version below got is shown, but never used as the default.
 7. **Dependencies**: warns if a mod this one depends on (a `<modid>_version` property) has unreleased changes or a running release chain on the same MC version.
