@@ -67,7 +67,7 @@ For the commits the filter can't tell apart, e.g. a build change that also touch
 
 ## Changelog drafts
 
-`cc-changelog <patch|minor|major>` now starts from a draft made by `cc-changelog-draft`, instead of the raw `git log`:
+`cc-changelog <patch|minor|major>` starts from a draft made by `cc-changelog-draft`:
 
 ```text
 As always, don't forget to backup your world before updating!
