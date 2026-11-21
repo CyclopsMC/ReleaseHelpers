@@ -762,6 +762,10 @@ const versionList = names => names.join(', ');
 // The color GitHub shows for a status, as a ring before its name.
 const statusDot = color => (color ? h('span', { class: `status-dot gh-${String(color).toLowerCase()}`, 'aria-hidden': 'true' }) : null);
 
+// A small thumbs up, in the color of the text.
+const thumb = () => svg('svg', { viewBox: '0 0 16 16', class: 'thumb', 'aria-hidden': 'true' },
+  svg('path', { d: 'M2 7.2h2.6v6.6H2zM5.6 13.8V7.2l2.8-4.9c1 0 1.7.8 1.5 1.8l-.5 2.4h3.4c.9 0 1.5.8 1.3 1.6l-1.1 4.6c-.2.7-.7 1.1-1.4 1.1z', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linejoin': 'round' }));
+
 // One project board item: its title, then the mod, number and whether its fix is released.
 function boardItem(i, { status = false } = {}) {
   return h('li', null,
@@ -769,6 +773,7 @@ function boardItem(i, { status = false } = {}) {
     h('div.meta', null,
       status && i.status ? h('span.status', null, statusDot(i.statusColor), i.status) : null,
       [i.mod, i.number ? `#${i.number}` : null, i.kind === 'pr' ? 'PR' : null, i.kind === 'draft' ? 'draft' : null].filter(Boolean).join(' '),
+      i.upvotes ? h('span.upvotes', { title: `${plural(i.upvotes, 'upvote')} (👍) on GitHub` }, thumb(), String(i.upvotes)) : null,
       i.unreleased.length ? h('span.unreleased', { title: 'A commit that closes it is not released on these versions yet' }, `not released on ${versionList(i.unreleased)}`) : null));
 }
 

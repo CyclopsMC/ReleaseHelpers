@@ -19,6 +19,7 @@ function parseProject(spec) {
 // Issues and pull requests have a state of different types, so each gets its own name.
 const content = state => `
           number title url ${state}: state
+          upvotes: reactions(content: THUMBS_UP) { totalCount }
           repository { nameWithOwner }
           labels(first: 5) { nodes { name } }`;
 const query = user => `query($owner: String!, $number: Int!, $after: String) {
@@ -46,7 +47,7 @@ const query = user => `query($owner: String!, $number: Int!, $after: String) {
   }
 }`;
 
-// { title, url, statuses: [name], colors: { status: color }, items: [{ status, kind, number, title, url, state, repo, labels }] }
+// { title, url, statuses: [name], colors: { status: color }, items: [{ status, kind, number, title, url, state, repo, labels, upvotes }] }
 // Colors are GitHub's names for them: GRAY, BLUE, GREEN, YELLOW, ORANGE, RED, PINK or PURPLE.
 async function fetchProject(project) {
   let after = null;
@@ -71,6 +72,8 @@ async function fetchProject(project) {
         state: c.issueState || c.prState || null,
         repo: c.repository ? c.repository.nameWithOwner : null,
         labels: c.labels ? c.labels.nodes.map(l => l.name) : [],
+        // 👍 reactions, as people upvote issues on GitHub.
+        upvotes: c.upvotes ? c.upvotes.totalCount : 0,
       });
     }
     if (!board.items.pageInfo.hasNextPage) break;
@@ -144,7 +147,7 @@ function summarizeProjects(boards, mods, { perColumn = 6 } = {}) {
     };
     const forPanel = items.filter(x => x.mod && (!x.done || x.unreleased.length)).sort((a, b) => rank(a) - rank(b));
     for (const i of forPanel) {
-      (perMod[i.mod] = perMod[i.mod] || []).push({ project: data.title, status: i.status, statusColor: colorOf(i.status), done: i.done, kind: i.kind, number: i.number, title: i.title, url: i.url, unreleased: i.unreleased });
+      (perMod[i.mod] = perMod[i.mod] || []).push({ project: data.title, status: i.status, statusColor: colorOf(i.status), done: i.done, kind: i.kind, number: i.number, title: i.title, url: i.url, upvotes: i.upvotes, unreleased: i.unreleased });
     }
     return {
       spec,

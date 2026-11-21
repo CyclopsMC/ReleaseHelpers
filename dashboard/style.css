@@ -614,3 +614,6 @@ span.mod-icon { display: inline-grid; place-items: center; font: 600 9px var(--m
 
 /* The light/dark toggle in the header. */
 .btn.icon.theme svg { width: 15px; height: 15px; }
+/* Upvotes (👍) of an issue on a project board. */
+.upvotes { display: inline-flex; align-items: center; gap: 3px; font: 600 11.5px var(--mono); color: var(--text); }
+.upvotes .thumb { width: 12px; height: 12px; color: var(--muted); }

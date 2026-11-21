@@ -23,7 +23,7 @@ const issue = (number, title, status, extra = {}) => ({
 // Two pages, to check that all of a board is read.
 const PAGES = [
   [
-    issue(1, 'Crash on load', 'In Progress'),
+    issue(1, 'Crash on load', 'In Progress', { upvotes: { totalCount: 7 } }),
     issue(2, 'Wrong tooltip', 'Todo'),
     issue(3, 'Old crash', 'Done', { issueState: 'CLOSED' }),
     { ...issue(4, 'Archived', 'Todo'), isArchived: true },
@@ -113,6 +113,8 @@ test('reads every page of a board, and skips archived items', async () => {
   assert.deepStrictEqual(board.items.map(i => i.number || i.title), [1, 2, 3, 7, 8, 9, 'An idea']);
   assert.strictEqual(board.items.find(i => i.number === 3).state, 'CLOSED');
   assert.strictEqual(board.items.find(i => i.title === 'An idea').kind, 'draft');
+  // Upvotes are 👍 reactions; none when there are none, or for a draft.
+  assert.deepStrictEqual(board.items.map(i => i.upvotes), [7, 0, 0, 0, 0, 0, 0]);
 });
 
 test('says how to add the scope when the token lacks it', async () => {
@@ -139,6 +141,7 @@ test('sums up a board: active columns furthest first, and fixes that are not rel
   assert.deepStrictEqual([b.open, b.done], [4, 3]);
   assert.deepStrictEqual(b.unreleased.map(i => [i.number, i.unreleased]), [[7, ['1.21-lts', '26']]]);
   // The panel: furthest along first, done but not released last; an open item notes its unreleased fix.
+  assert.strictEqual(perMod.ModP[0].upvotes, 7);
   assert.deepStrictEqual(perMod.ModP.map(i => [i.number, i.status, i.statusColor, i.unreleased]),
     [[1, 'In Progress', 'YELLOW', ['1.21-lts']], [2, 'Todo', 'GREEN', []], [9, null, null, []], [7, 'Done', 'PURPLE', ['1.21-lts', '26']]]);
 });
