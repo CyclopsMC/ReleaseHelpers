@@ -126,7 +126,7 @@ What you can do on it:
 - Mods are ordered by their dependencies (by `<mod>_version` properties, as in `cc-release-chain`), and say which ones they wait for: dependencies with changes to release or a running chain.
 - With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links.
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
-- The tab title shows how many mods have work, e.g. `(3) CC status`.
+- The tab title shows how many mods need a release or an upmerge, e.g. `(3) CC status`. The tab icon is green when none do (translations alone don't count), orange when some do, and red on errors or failing CI.
 
 Next to the table (below it on narrow screens), cards show:
 

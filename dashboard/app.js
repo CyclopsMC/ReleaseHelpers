@@ -157,6 +157,7 @@ function renderBar() {
   sync.replaceChildren();
   if (!state) {
     sync.append(h('span.spinner'), 'Connecting…');
+    setFavicon('loading');
     return;
   }
   const counts = {};
@@ -177,8 +178,10 @@ function renderBar() {
   const bell = $('#notify');
   bell.classList.toggle('on', notifyOn());
   bell.title = notifyOn() ? 'Notifications are on: new work, CI failures and chains that wait for you. Click to turn off.' : 'Turn on notifications';
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  document.title = total ? `(${total}) CC status` : 'CC status';
+  // Only translations can wait, so they don't count as work here.
+  const work = (counts.todo || 0) + (counts.upmerge || 0);
+  document.title = work ? `(${work}) CC status` : 'CC status';
+  setFavicon(loading ? 'loading' : (errors || failing ? 'problem' : (work ? 'work' : 'ok')));
 
   const r = state.refresh;
   $('#progress').classList.toggle('on', !!r.running);
@@ -574,6 +577,24 @@ $('#notify').addEventListener('click', async () => {
   renderBar();
 });
 
+// The tab icon: green when there is nothing to release (translations aside), orange when there
+// is, red on errors or failing CI. Each has its own mark, so color isn't the only cue.
+const CHECK = "<path d='M10 16.5l4 4 8-9' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/>";
+const FAVICONS = {
+  ok: ['#2da44e', CHECK],
+  work: ['#d4881c', "<path d='M16 23V10M10.5 15.5L16 10l5.5 5.5' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/>"],
+  problem: ['#cf222e', "<path d='M16 9v8.5' stroke='white' stroke-width='3.4' stroke-linecap='round'/><circle cx='16' cy='22.6' r='2' fill='white'/>"],
+  loading: ['#8c8c93', CHECK],
+};
+let favicon = null;
+function setFavicon(kind) {
+  if (kind === favicon) return;
+  favicon = kind;
+  const [fill, mark] = FAVICONS[kind];
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='3' y='3' width='26' height='26' rx='7' fill='${fill}'/>${mark}</svg>`;
+  $('link[rel="icon"]').href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 // --- Insights: downloads, releases and GitHub ---
 
 const compact = n => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)}M` : (n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n)));
@@ -588,10 +609,11 @@ function platformLinks(name) {
   ];
 }
 
-// The column next to the table: project boards, then downloads and releases.
+// The column next to the table: what changes often first, the project boards, then the download totals.
 function renderInsights() {
   const box = $('#insights');
-  const cards = [...(state.projects ? projectCards(state.projects) : []), ...(state.insights ? insightCards(state.insights) : [])];
+  const ins = state.insights ? insightCards(state.insights) : {};
+  const cards = [ins.perVersion, ins.github, ins.releases, ...(state.projects ? projectCards(state.projects) : []), ins.downloads].filter(Boolean);
   $('#layout').classList.toggle('with-insights', cards.length > 0);
   box.hidden = !cards.length;
   box.replaceChildren(...cards);
@@ -635,17 +657,18 @@ function projectCards(p) {
 }
 
 function insightCards(ins) {
-  const cards = [];
+  // By name, so the column can put them in its own order.
+  const cards = {};
   const dl = ins.downloads;
   if (!dl.mods.length) {
-    cards.push(h('div.card', null, h('h3', null, 'Downloads'),
+    cards.downloads = (h('div.card', null, h('h3', null, 'Downloads'),
       ins.running ? h('div', null, h('span.spinner'), ' Asking CurseForge and Modrinth…')
         : h('p.note', null, 'No mod names its curseforge_project_id or modrinth_project_id in gradle.properties.')));
   } else {
     const total = m => (m.curseforge || 0) + (m.modrinth || 0);
     const mods = dl.mods.slice().sort((a, b) => total(b) - total(a));
     const max = Math.max(1, ...mods.map(total));
-    cards.push(h('div.card', null,
+    cards.downloads = (h('div.card', null,
       h('h3', null, 'Downloads', h('span.src', null, 'CurseForge + Modrinth, all time')),
       h('div.kpis', null,
         h('div.kpi', null, h('div.num', null, compact(dl.curseforge)), h('div.lbl', null, 'on CurseForge')),
@@ -660,7 +683,7 @@ function insightCards(ins) {
       ins.fetchedAt ? h('p.note', null, `Updated ${ago(ins.fetchedAt)}.`) : null));
 
     const vmax = Math.max(1, ...ins.perVersion.map(v => v.downloads));
-    cards.push(h('div.card', null,
+    cards.perVersion = (h('div.card', null,
       h('h3', null, 'Downloads per MC version', h('span.src', null, `last ${ins.recentDays} days`)),
       ins.perVersion.map(v => h('div.meter', { title: `${v.name} (${v.mc}): ${full(v.downloads)} downloads of ${v.files} files published in the last ${ins.recentDays} days` },
         h('span.name.mono', null, v.name),
@@ -672,7 +695,7 @@ function insightCards(ins) {
   if (ins.github) {
     const mods = ins.github.mods.slice().sort((a, b) => (b.issues + b.prs) - (a.issues + a.prs));
     const link = (m, kind, n) => (n ? h('a', { href: `https://github.com/${(state.mods.find(x => x.name === m.name) || {}).github}/${kind}`, target: '_blank', rel: 'noopener' }, String(n)) : '0');
-    cards.push(h('div.card', null,
+    cards.github = (h('div.card', null,
       h('h3', null, 'Open on GitHub', h('span.src', null, `${ins.github.issues} issues · ${ins.github.prs} PRs`)),
       h('table.mini', null,
         h('tr', null, h('th', null, ''), h('th.n', null, 'Issues'), h('th.n', null, 'PRs')),
@@ -681,7 +704,7 @@ function insightCards(ins) {
           h(m.issues ? 'td.n' : 'td.n.zero', null, link(m, 'issues', m.issues)),
           h(m.prs ? 'td.n' : 'td.n.zero', null, link(m, 'pulls', m.prs)))))));
   } else {
-    cards.push(h('div.card', null, h('h3', null, 'Open on GitHub'),
+    cards.github = (h('div.card', null, h('h3', null, 'Open on GitHub'),
       h('p.note', null, 'Needs a GitHub token: run gh auth login, or set GH_TOKEN.')));
   }
 
@@ -707,7 +730,7 @@ function insightCards(ins) {
       const rest = [latest.pending ? `${latest.pending} may still be uploading` : null, latest.unknown ? `${latest.unknown} not checked yet` : null];
       return h('p.note', null, `${onBoth} of the ${latest.total} latest releases per version are on both CurseForge and Modrinth; ${rest.filter(Boolean).join(', ')}.`);
     };
-    cards.push(h('div.card', null,
+    cards.releases = (h('div.card', null,
       h('h3', null, 'Recent releases', h('span.src', null, '✓ on CurseForge and Modrinth')),
       h('table.mini.releases', null, ins.releases.map(r => {
         const repo = (state.mods.find(x => x.name === r.mod) || {}).github;
