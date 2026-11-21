@@ -48,7 +48,7 @@ function h(spec, attrs, ...children) {
 function svg(tag, attrs, ...children) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
   for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
-  el.append(...children);
+  el.append(...children.filter(c => c !== null && c !== undefined));
   return el;
 }
 
@@ -144,6 +144,7 @@ function render() {
   renderBar();
   renderBanner();
   if (!state) return;
+  renderStrip();
   renderGrid();
   renderGroups();
   renderProblems();
@@ -219,6 +220,7 @@ function renderGrid() {
   const rows = state.mods.map(mod => {
     const header = h('th', null,
       h('div.mod-name', null,
+        modIcon(mod.name),
         h('span', null, mod.name),
         mod.github ? h('a.mod-link', { href: `https://github.com/${mod.github}`, target: '_blank', rel: 'noopener', title: 'Open on GitHub' }, '↗') : null,
         mod.chains.map(chainPill)),
@@ -250,7 +252,8 @@ function renderGroups() {
   box.replaceChildren();
   if (state.mods.some(m => m.loading)) return;
   let any = false;
-  for (const g of GROUPS) {
+  // What to release is in the strip at the top.
+  for (const g of GROUPS.filter(x => x.key !== 'todo')) {
     const byVersion = state.versions.map(() => []);
     for (const m of state.mods) if (m.group === g.key) byVersion[m.start].push(m);
     if (!byVersion.some(l => l.length)) continue;
@@ -262,9 +265,9 @@ function renderGroups() {
         h('div.mods', null, mods.map(m => h(m.blockedBy && m.blockedBy.length ? 'button.mod-chip.blocked' : 'button.mod-chip', {
           onclick: () => select(m.name, state.versions[i].name),
           title: m.blockedBy && m.blockedBy.length ? `Waits for ${m.blockedBy.join(', ')}` : null,
-        }, m.name, m.chains.length ? ' ▸' : '')))) : null))));
+        }, modIcon(m.name, true), m.name, m.chains.length ? ' ▸' : '')))) : null))));
   }
-  if (!any && state.mods.length) box.append(h('div.card.done', null, h('h3', null, 'Nothing to release or upmerge.')));
+  if (!any) box.replaceChildren();
 }
 
 function renderProblems() {
@@ -596,6 +599,139 @@ function setFavicon(kind) {
   $('link[rel="icon"]').href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+// --- Mod icons ---
+
+// The cached icon of a mod, or its initials.
+function modIcon(name, small = false) {
+  const cls = small ? 'mod-icon small' : 'mod-icon';
+  if (state && state.icons && state.icons.includes(name)) {
+    return h('img', { class: cls, src: `/icons/${encodeURIComponent(name)}`, alt: '', loading: 'lazy' });
+  }
+  return h('span', { class: cls, 'aria-hidden': 'true' }, name.replace(/[^A-Z]/g, '').slice(0, 2) || name.slice(0, 1));
+}
+
+// --- The strip: up to date, shipped, ready to ship ---
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// "3 fixes · 1 addition", leaving out what there is none of.
+const KINDS = [['Fixes', 'fix', 'fixes'], ['Additions', 'addition', 'additions'], ['Changes', 'change', 'changes']];
+function changeParts(counts) {
+  return KINDS.filter(([key]) => counts[key]).flatMap(([key, one, many], i) => [i ? ' · ' : '', h('b', null, String(counts[key])), ` ${counts[key] === 1 ? one : many}`]);
+}
+
+function renderStrip() {
+  const box = $('#strip');
+  box.hidden = !state.mods.length || state.mods.some(m => m.loading);
+  if (box.hidden) return;
+  const count = key => state.mods.filter(m => m.group === key).length;
+  const segs = [
+    ['ok', state.mods.filter(m => !m.group).length, 'up to date'],
+    ['release', count('todo'), 'to release'],
+    ['upmerge', count('upmerge'), 'upmerge only'],
+    ['translations', count('translations'), 'only translations'],
+  ].filter(x => x[1]);
+  const upToDate = h('div.strip-block', null,
+    h('div.strip-label', null, 'Up to date'),
+    h('div.strip-num', null, String(state.mods.filter(m => !m.group).length), h('small', null, `/ ${plural(state.mods.length, 'mod')}`)),
+    h('div.segbar', null, segs.map(([k, n, label]) => h('span', { title: `${n} ${label}`, style: `flex: ${n}; background: var(--seg-${k})` }))),
+    h('div.seg-legend', null, segs.map(([k, n, label]) => h('span', null, h('i', { style: `background: var(--seg-${k})` }), `${n} ${label}`))));
+
+  const mo = state.momentum;
+  const reached = state.insights && state.insights.reached;
+  const shipped = h('div.strip-block', null, h('div.strip-label', null, `Shipped, last ${mo ? mo.recentDays : 30} days`),
+    mo ? h('div.shipped-row', null,
+      h('div', null,
+        h('div.strip-num', null, String(mo.releases), h('small', null, mo.releases === 1 ? 'release' : 'releases')),
+        h('div.strip-line', null, changeParts(mo.counts)),
+        reached ? h('div.strip-sub', null, `downloaded ${compact(reached.downloads)} times so far`) : null),
+      h('div.chart-col', null,
+        mo.streak > 1 ? h('span.streak', { title: 'Weeks in a row with a release' }, `▲ ${mo.streak}-week streak`) : null,
+        weeksChart(mo.weeks),
+        h('div.chart-axis', null, h('span', null, `${mo.weeks.length} wk ago`), h('span', null, 'now'))))
+      : h('div', null, h('span.spinner'), ' Counting…'));
+
+  const ready = state.mods.filter(m => m.group === 'todo');
+  const sum = key => ready.reduce((n, m) => n + m.ready[key], 0);
+  const changes = sum('Fixes') + sum('Additions') + sum('Changes');
+  const translated = count('translations');
+  const readyBlock = h('div.strip-block', null, h('div.strip-label', null, 'Ready to ship'),
+    ready.length ? [
+      h('div.strip-num', null, String(changes), h('small', null, changes === 1 ? 'change waiting for players' : 'changes waiting for players')),
+      h('div.strip-line', null, changeParts({ Fixes: sum('Fixes'), Additions: sum('Additions'), Changes: sum('Changes') }),
+        translated ? [changes ? ' · ' : '', 'new translations for ', h('b', null, String(translated)), translated === 1 ? ' mod' : ' mods'] : null),
+      h('div.ready-mods', null, ready.map(m => {
+        const from = state.versions[m.start].name;
+        const n = m.ready.Fixes + m.ready.Additions + m.ready.Changes + m.ready.translations;
+        const blocked = m.blockedBy && m.blockedBy.length;
+        return h(blocked ? 'button.ready-mod.blocked' : 'button.ready-mod', {
+          title: blocked ? `Release ${m.blockedBy.join(', ')} first` : `Open ${m.name}: its release chain starts at ${from}`,
+          onclick: () => select(m.name, from),
+        }, modIcon(m.name, true), h('span', null, m.name), h('span.from', null, `from ${from}`), h('b', null, String(n)));
+      })),
+    ] : [
+      h('div.strip-num', null, '0', h('small', null, 'changes waiting')),
+      h('div.all-clear', null, translated ? `Only new translations for ${plural(translated, 'mod')}.` : 'Everything you made is out there.'),
+    ]);
+  box.replaceChildren(upToDate, shipped, readyBlock);
+}
+
+// Releases per week, oldest first; hover a bar for its count.
+function weeksChart(weeks) {
+  const bw = 12, gap = 4, height = 50;
+  const max = Math.max(1, ...weeks);
+  const width = weeks.length * (bw + gap) - gap;
+  const bars = weeks.map((n, i) => {
+    const x = i * (bw + gap);
+    const ago = weeks.length - 1 - i;
+    const bh = n ? Math.max(4, Math.round((n / max) * (height - 2))) : 0;
+    const mark = n
+      ? svg('path', { d: `M${x},${height} v-${bh - 3} q0,-3 3,-3 h${bw - 6} q3,0 3,3 v${bh - 3} z`, fill: 'var(--cable)', opacity: ago === 0 ? '1' : '.55' })
+      : svg('rect', { x, y: height - 1, width: bw, height: 1, fill: 'var(--faint)' });
+    return svg('g', null,
+      svg('title', null, `${ago === 0 ? 'This week' : `${plural(ago, 'week')} ago`}: ${plural(n, 'release')}`),
+      svg('rect', { class: 'hit', x: x - gap / 2, y: 0, width: bw + gap, height }),
+      mark);
+  });
+  return svg('svg', { width, height, role: 'img', 'aria-label': `Releases per week, last ${weeks.length} weeks: ${weeks.join(', ')}` }, ...bars);
+}
+
+// --- Light and dark ---
+
+// Follows the system, unless you chose light or dark here (remembered in this browser).
+const THEMES = [
+  { key: null, title: 'Light or dark: as your system (click for light)', icon: 'M8 1.8a6.2 6.2 0 1 0 0 12.4zM8 1.8a6.2 6.2 0 0 1 0 12.4' },
+  { key: 'light', title: 'Light (click for dark)', icon: 'M8 4.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8zM8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9 13 13M3 13l1.1-1.1M11.9 4.1 13 3' },
+  { key: 'dark', title: 'Dark (click to follow your system)', icon: 'M13.5 10.2A5.8 5.8 0 0 1 5.8 2.5a5.8 5.8 0 1 0 7.7 7.7z' },
+];
+function storedTheme() {
+  try {
+    return localStorage.getItem('cc-theme');
+  } catch (e) {
+    return null;
+  }
+}
+function applyTheme(key) {
+  try {
+    if (key) localStorage.setItem('cc-theme', key);
+    else localStorage.removeItem('cc-theme');
+  } catch (e) {
+    // Only for this visit, then.
+  }
+  if (key) document.documentElement.dataset.theme = key;
+  else delete document.documentElement.dataset.theme;
+  const t = THEMES.find(x => x.key === key) || THEMES[0];
+  const button = $('#theme');
+  button.title = t.title;
+  button.replaceChildren(svg('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+    svg('path', { d: t.icon, fill: key === 'dark' || !key ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'fill-opacity': key ? '1' : '.35' })));
+}
+$('#theme').addEventListener('click', () => {
+  const i = THEMES.findIndex(x => x.key === storedTheme());
+  applyTheme(THEMES[(Math.max(0, i) + 1) % THEMES.length].key);
+});
+applyTheme(storedTheme());
+
 // --- Insights: downloads, releases and GitHub ---
 
 const compact = n => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)}M` : (n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n)));
@@ -677,7 +813,7 @@ function insightCards(ins) {
       mods.map(m => h('div.meter.with-links', {
         title: `${m.name}: ${full(m.curseforge)} on CurseForge, ${full(m.modrinth)} on Modrinth${m.followers !== null ? `, ${m.followers} followers on Modrinth` : ''}`,
       },
-      h('span.name', null, m.name),
+      h('span.name', null, modIcon(m.name, true), h('span', null, m.name)),
       h('div.track', null, h('div.fill', { style: `width: ${(total(m) / max) * 100}%` })),
       h('span.val', null, compact(total(m))),
       // The projects, as CF and MR, the usual short names, to leave room for the bar.
@@ -742,7 +878,7 @@ function insightCards(ins) {
         return h('tr', null,
           h('td.when', { title: new Date(r.date).toLocaleString() }, when(r.date)),
           h('td', null,
-            h('div.mod', null, r.mod),
+            h('div.mod', null, modIcon(r.mod, true), r.mod),
             h('div.mono.tag', null, repo ? h('a', { href: `https://github.com/${repo}/releases/tag/${encodeURIComponent(r.tag)}`, target: '_blank', rel: 'noopener' }, r.tag) : r.tag)),
           h('td.n.pub', null, pub[r.published]()));
       })),

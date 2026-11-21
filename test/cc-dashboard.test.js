@@ -23,7 +23,7 @@ function request(method, pathname, { headers = {}, body, port = info.port } = {}
       let data = '';
       res.setEncoding('utf8');
       res.on('data', d => { data += d; });
-      res.on('end', () => resolve({ status: res.statusCode, body: data, json: () => JSON.parse(data) }));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data, json: () => JSON.parse(data) }));
     });
     req.on('error', reject);
     req.end(body ? JSON.stringify(body) : undefined);
@@ -127,6 +127,22 @@ test('serves the page and the status of every mod', async () => {
   assert.strictEqual(modA.group, 'todo');
   assert.strictEqual(modA.start, 0);
   assert.strictEqual(modA.cells[0].unreleased.userFacing[0].subject, 'Fix crash');
+  // Waiting on 1.20 and to upmerge into 1.21: counted once.
+  assert.deepStrictEqual(modA.ready, { Fixes: 1, Additions: 0, Changes: 0, translations: 0 });
+});
+
+test('serves the fonts, and only known icons', async () => {
+  const font = await request('GET', '/fonts/ibm-plex-sans-latin-400-normal.woff2');
+  assert.strictEqual(font.status, 200);
+  assert.strictEqual(font.headers['content-type'], 'font/woff2');
+  assert.strictEqual((await request('GET', '/fonts/..%2Fapp.js')).status, 404);
+  assert.strictEqual((await request('GET', '/fonts/nope.woff2')).status, 404);
+  // No mod here has an icon: none are fetched without project IDs.
+  assert.strictEqual((await request('GET', '/icons/ModA')).status, 404);
+  assert.strictEqual((await request('GET', '/icons/..%2Fdashboard.json')).status, 404);
+  const s = await waitFor(async () => { const x = await state(); return x.momentum && x; }, 'what was shipped');
+  assert.deepStrictEqual(s.icons, []);
+  assert.strictEqual(s.momentum.weeks.length, 12);
 });
 
 test('orders mods by their dependencies, and says what they wait for', async () => {

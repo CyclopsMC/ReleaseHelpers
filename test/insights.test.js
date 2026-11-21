@@ -49,13 +49,19 @@ before(async () => {
       { version_number: '1.20.1-1.0.0', version_type: 'release', game_versions: ['1.20.1'], downloads: 20, date_published: daysAgo(10) },
     ],
   };
+  const ICON = Buffer.from('not really a png');
   server = http.createServer((req, res) => {
+    if (req.url === '/mr/icon.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png' });
+      return res.end(ICON);
+    }
     const body = routes[req.url];
     const down = req.url.startsWith('/mr/') && !modrinthUp;
     res.writeHead(body && !down ? 200 : (down ? 500 : 404), { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body && !down ? body : {}));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  routes['/mr/project/abc'].icon_url = `http://127.0.0.1:${server.address().port}/mr/icon.png`;
   Object.assign(process.env, sb.env, {
     CC_HELPERS_CONFIG: sb.path('cc-helpers.json'),
     CC_HELPERS_CFWIDGET_API: `http://127.0.0.1:${server.address().port}/cf`,
@@ -103,6 +109,8 @@ test('counts downloads, per MC version of the last 90 days, and checks the relea
   assert.deepStrictEqual(ins.releases.map(r => [r.tag, r.published]), [['1.21.1-2.0.0', 'no'], ['1.20.1-1.0.0', 'yes']]);
   assert.deepStrictEqual(ins.latest, { total: 2, missing: [{ mod: 'ModA', tag: '1.21.1-2.0.0', published: 'no' }], pending: 0, unknown: 0 });
   assert.strictEqual(ins.github, null);
+  // Releases of the last 30 days: not the beta, not the 200 days old one.
+  assert.deepStrictEqual(ins.reached, { downloads: 500 + 300 + 20, days: 30 });
   // Kept for the next start.
   const saved = JSON.parse(fs.readFileSync(sb.path('state', 'insights.json'), 'utf8'));
   assert.strictEqual(saved.mods.ModA.curseforge.total, 1000);
@@ -207,6 +215,32 @@ test('finds tags in every checkout of a mod', async () => {
     await monitor.request('local');
     await monitor.refreshInsights();
     assert.ok(monitor.platforms.get('ModA').tags.some(t => t.tag === '1.21.1-2.0.1'));
+  } finally {
+    monitor.stop();
+  }
+});
+
+test('caches the icon of a mod, and serves only that', async () => {
+  const { Monitor } = require('../bin/lib/monitor');
+  const monitor = new Monitor({ options: {} });
+  try {
+    monitor.reload();
+    await monitor.request('local');
+    await monitor.refreshInsights();
+    const icon = monitor.iconFile('ModA');
+    assert.strictEqual(icon.type, 'image/png');
+    assert.strictEqual(fs.readFileSync(icon.file, 'utf8'), 'not really a png');
+    assert.deepStrictEqual(monitor.snapshot().icons, ['ModA']);
+    assert.strictEqual(monitor.iconFile('../ModA'), null);
+    // The next start knows it without fetching it again.
+    const again = new Monitor({ options: {} });
+    try {
+      again.reload();
+      again.loadInsights();
+      assert.strictEqual(again.iconFile('ModA').file, icon.file);
+    } finally {
+      again.stop();
+    }
   } finally {
     monitor.stop();
   }

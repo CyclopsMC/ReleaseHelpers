@@ -14,7 +14,9 @@ const { readChains, chainsDir } = require('./progress');
 const { stateDir } = require('./lock');
 const { gitOrNull, runPool } = require('./git');
 const { readPropsAt } = require('./props');
-const { fetchPlatforms, summarize, publishState } = require('./insights');
+const { fetchPlatforms, summarize, publishState, getBinary } = require('./insights');
+const { shipped } = require('./momentum');
+const { sectionFor } = require('./changelog');
 const { parseProject, fetchProject, summarizeProjects } = require('./projects');
 const {
   discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, isUpmergeOnly, modWork, cellText, originUrl,
@@ -39,6 +41,26 @@ const DEFAULTS = {
 const NEW_RELEASE_RECHECK_MS = 60 * 1000;
 const UPLOADING_RECHECK_MS = 10 * 60 * 1000;
 const insightsFile = () => path.join(stateDir(), 'insights.json');
+const iconsDir = () => path.join(stateDir(), 'icons');
+const ICON_TYPES = { png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif' };
+const MAX_ICON = 512 * 1024;
+// What was shipped is counted again after a release, and at least this often (the window moves).
+const MOMENTUM_MS = 3600 * 1000;
+
+// The changes of a mod that wait for a release, counted once over its versions, per changelog section.
+function readyCounts(cells) {
+  const commits = new Map();
+  for (const c of cells) {
+    if (!c || c.missing || c.error) continue;
+    for (const k of [...(c.unreleased ? c.unreleased.userFacing : []), ...(c.pending ? c.pending.userFacing : [])]) commits.set(k.subject, k);
+  }
+  const counts = { Fixes: 0, Additions: 0, Changes: 0, translations: 0 };
+  for (const k of commits.values()) {
+    if (k.kind === 'translations') counts.translations++;
+    else counts[sectionFor(k.subject)]++;
+  }
+  return counts;
+}
 
 // Files in .git that change without affecting the status, or while git is still busy.
 const IGNORED_GIT_FILES = /(\.lock$|^FETCH_HEAD$|^COMMIT_EDITMSG$|^logs|^objects|^gc\.|\.tmp$)/;
@@ -104,6 +126,12 @@ class Monitor extends EventEmitter {
     // [{ spec, data | null, error | null }] of the project boards in the config.
     this.boards = [];
     this.projectsRunning = false;
+    // mod -> { url, file, type } of its cached icon.
+    this.icons = new Map();
+    this.momentum = null;
+    this.momentumKey = null;
+    this.momentumAt = 0;
+    this.momentumRunning = false;
   }
 
   opt(name) {
@@ -234,6 +262,7 @@ class Monitor extends EventEmitter {
       batch.forEach(b => b.resolve());
       this.changed();
       this.recheckNewReleases();
+      this.refreshMomentum();
     }
   }
 
@@ -410,6 +439,7 @@ class Monitor extends EventEmitter {
     try {
       const saved = JSON.parse(fs.readFileSync(insightsFile(), 'utf8'));
       for (const [mod, data] of Object.entries(saved.mods || {})) this.platforms.set(mod, data);
+      for (const [mod, icon] of Object.entries(saved.icons || {})) if (fs.existsSync(icon.file)) this.icons.set(mod, icon);
     } catch (e) {
       // Fetched below.
     }
@@ -419,11 +449,56 @@ class Monitor extends EventEmitter {
     try {
       fs.mkdirSync(stateDir(), { recursive: true });
       const tmp = `${insightsFile()}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ mods: Object.fromEntries(this.platforms) }));
+      fs.writeFileSync(tmp, JSON.stringify({ mods: Object.fromEntries(this.platforms), icons: Object.fromEntries(this.icons) }));
       fs.renameSync(tmp, insightsFile());
     } catch (e) {
       this.log(`Can't save ${insightsFile()}: ${e.message}`);
     }
+  }
+
+  // Downloads the icon of a mod, once per URL, so the page works offline.
+  async cacheIcon(mod, url) {
+    const known = this.icons.get(mod);
+    if (!url || (known && known.url === url && fs.existsSync(known.file))) return;
+    const ext = (/\.(png|webp|jpe?g|gif)(?:[?#]|$)/i.exec(url) || [])[1];
+    if (!ext) return;
+    try {
+      const data = await getBinary(url);
+      if (data.length > MAX_ICON) throw new Error('too large');
+      fs.mkdirSync(iconsDir(), { recursive: true });
+      const file = path.join(iconsDir(), `${mod.replace(/[^\w.-]/g, '_')}.${ext.toLowerCase()}`);
+      fs.writeFileSync(file, data);
+      this.icons.set(mod, { url, file, type: ICON_TYPES[ext.toLowerCase()] });
+    } catch (e) {
+      this.log(`Can't fetch the icon of ${mod}: ${e.message}`);
+    }
+  }
+
+  // { file, type } of the cached icon of a mod, or null.
+  iconFile(mod) {
+    const icon = this.found.mods.includes(mod) && this.icons.get(mod);
+    return icon && fs.existsSync(icon.file) ? icon : null;
+  }
+
+  // Counts what was shipped lately; again after a release, and at least every hour.
+  refreshMomentum() {
+    if (!this.config || this.momentumRunning || !Object.keys(this.status).length) return;
+    const key = JSON.stringify(Object.entries(this.status).map(([mod, cells]) => [mod, cells.map(c => c && c.lastRelease)]));
+    if (key === this.momentumKey && Date.now() - this.momentumAt < MOMENTUM_MS) return;
+    this.momentumRunning = true;
+    const mcs = this.versionMcs().map(v => v.mc).filter(Boolean);
+    const mods = this.found.mods.map(name => ({ name, dirs: checkouts(this.config, { mods: [name], byVersion: this.found.byVersion }).map(c => c.repoDir) }));
+    return shipped(mods, mcs)
+      .then(r => {
+        this.momentum = r;
+        this.momentumKey = key;
+        this.momentumAt = Date.now();
+      })
+      .catch(e => this.log(`Counting what was shipped failed: ${e.stack || e.message}`))
+      .finally(() => {
+        this.momentumRunning = false;
+        this.changed();
+      });
   }
 
   // The MC version of each maintained version, as its checkouts say.
@@ -469,7 +544,9 @@ class Monitor extends EventEmitter {
         const all = [...byTag.values()].filter(t => mcs.some(mc => t.tag.startsWith(`${mc}-`)))
           .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
         const tags = all.filter((t, i) => i < 10 || last.includes(`refs/tags/${t.tag}`));
-        this.platforms.set(mod, await fetchPlatforms(ids, mcs, tags));
+        const data = await fetchPlatforms(ids, mcs, tags);
+        this.platforms.set(mod, data);
+        await this.cacheIcon(mod, data.icon);
       }), 4);
       this.saveInsights();
     } catch (e) {
@@ -521,6 +598,7 @@ class Monitor extends EventEmitter {
         ...base,
         upmergeOnly,
         ...modWork(cells),
+        ready: readyCounts(cells),
         deps: this.depsOf(name, cells),
         cells: cells.map((c, i) => {
           const json = cellJson(c, upmergeOnly);
@@ -548,6 +626,8 @@ class Monitor extends EventEmitter {
       refresh: { running: this.busy, ...this.info },
       features: { terminal: !!dashboard.terminal || process.platform === 'darwin', ide: Array.isArray(dashboard.ide) },
       insights: this.insightsSnapshot(),
+      momentum: this.momentum,
+      icons: this.found.mods.filter(m => this.iconFile(m)),
       projects: this.projectsSnapshot(),
     };
   }

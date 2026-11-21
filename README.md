@@ -111,7 +111,8 @@ The table has a row per mod and a column per MC version:
 - `!`: the checkout needs attention: wrong branch, uncommitted changes, unpushed commits, a merge in progress, or a last-release tag that differs from origin.
 - `-`: no checkout for this version. `?`: error, shown below the table.
 - Mods without any release (like the compat mods) are only upmerged: their cells only show `↑N`.
-- Above the table, the mods with work are grouped by the lowest MC version that needs it, which is where their release chain starts: to release first, then upmerge only, then only translations.
+- A strip at the top says how many mods are up to date, what you shipped in the last 30 days (releases, their fixes, additions and changes from the changelogs, how often they were downloaded, and releases per week with your streak), and what is ready to ship: the changes waiting for players per mod, with the version its release chain starts at. Click a mod there to open it.
+- Below it, the mods that only need an upmerge, or only have new translations, are grouped by the lowest MC version that needs it.
 
 How it stays up to date:
 
@@ -130,6 +131,8 @@ What you can do on it:
 - Mods are ordered by their dependencies (by `<mod>_version` properties, as in `cc-release-chain`), and say which ones they wait for: dependencies with changes to release or a running chain.
 - With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links.
 - The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
+- It follows your system's light or dark mode; the button next to the bell switches to light, dark, or back to the system (remembered in that browser).
+- Mods show their icon from Modrinth or CurseForge, downloaded once to `~/.cache/cc-helpers/icons/`. The fonts (IBM Plex, SIL Open Font License) ship with the dashboard, so it works offline.
 - The tab title shows how many mods need a release or an upmerge, e.g. `(3) CC status`. The tab icon is green when none do (translations alone don't count), orange when some do, and red on errors or failing CI.
 
 Next to the table (below it on narrow screens), cards show:

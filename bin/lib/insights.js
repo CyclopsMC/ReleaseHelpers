@@ -8,6 +8,8 @@ const https = require('https');
 
 const TIMEOUT_MS = 20000;
 const RECENT_DAYS = 90;
+// For "players reached": downloads of the releases of this many days.
+const REACHED_DAYS = 30;
 // A release this young may still be uploading, so a missing file isn't reported yet.
 const PUBLISH_GRACE_MS = 2 * 3600 * 1000;
 
@@ -35,19 +37,42 @@ function getJson(url) {
   });
 }
 
+// An image or other small file, following one redirect.
+function getBinary(url, redirects = 1) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = (u.protocol === 'http:' ? http : https).get(u, { headers: { 'User-Agent': 'cc-helpers' }, timeout: TIMEOUT_MS }, res => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
+        res.resume();
+        return resolve(getBinary(new URL(res.headers.location, u).href, redirects - 1));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`${u.host} answered ${res.statusCode}`));
+      }
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('timeout', () => req.destroy(new Error(`${u.host} did not answer in time`)));
+    req.on('error', reject);
+  });
+}
+
 const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // What the cards need of one mod: totals, downloads per MC version of recent files, and whether
 // each of `tags` ([{ tag, date }], tags look like <mc>-<version>) is on both platforms.
 // `ids`: { curseforge, modrinth }; `mcs`: the MC versions of the maintained branches.
 async function fetchPlatforms(ids, mcs, tags, now = Date.now()) {
-  const result = { fetchedAt: new Date(now).toISOString(), curseforge: null, modrinth: null, recent: {}, tags: [], errors: [] };
+  const result = { fetchedAt: new Date(now).toISOString(), curseforge: null, modrinth: null, icon: null, recent: {}, released: null, tags: [], errors: [] };
   const files = { curseforge: null, modrinth: null };
   if (ids.curseforge) {
     try {
       const cf = await getJson(`${cfwidgetApi()}/${encodeURIComponent(ids.curseforge)}`);
       result.curseforge = { total: cf.downloads.total, url: (cf.urls && cf.urls.curseforge) || null };
-      files.curseforge = cf.files.map(f => ({ name: f.name, mcs: f.versions, downloads: f.downloads, date: f.uploaded_at }));
+      result.icon = cf.thumbnail || null;
+      files.curseforge = cf.files.map(f => ({ name: f.name, mcs: f.versions, downloads: f.downloads, date: f.uploaded_at, release: f.type === 'release' }));
     } catch (e) {
       result.errors.push(`CurseForge: ${e.message}`);
     }
@@ -57,10 +82,19 @@ async function fetchPlatforms(ids, mcs, tags, now = Date.now()) {
       const id = encodeURIComponent(ids.modrinth);
       const [project, versions] = await Promise.all([getJson(`${modrinthApi()}/project/${id}`), getJson(`${modrinthApi()}/project/${id}/version`)]);
       result.modrinth = { total: project.downloads, followers: project.followers, url: `https://modrinth.com/mod/${project.slug}` };
-      files.modrinth = versions.map(v => ({ number: v.version_number, mcs: v.game_versions, downloads: v.downloads, date: v.date_published }));
+      // Modrinth's icon is the larger one.
+      result.icon = project.icon_url || result.icon;
+      files.modrinth = versions.map(v => ({ number: v.version_number, mcs: v.game_versions, downloads: v.downloads, date: v.date_published, release: v.version_type === 'release' }));
     } catch (e) {
       result.errors.push(`Modrinth: ${e.message}`);
     }
+  }
+
+  // Releases only: CI publishes a beta on every push.
+  const all = [...(files.curseforge || []), ...(files.modrinth || [])];
+  if (files.curseforge || files.modrinth) {
+    const reachedSince = now - REACHED_DAYS * 86400000;
+    result.released = all.filter(f => f.release && Date.parse(f.date) >= reachedSince).reduce((n, f) => n + f.downloads, 0);
   }
 
   const since = now - RECENT_DAYS * 86400000;
@@ -122,12 +156,15 @@ function summarize(mods, versions, now = Date.now()) {
     const entry = m.platforms.tags.find(t => t.tag === tag);
     return { mod: m.name, tag, published: publishState(entry, entry && entry.date, now) };
   }));
+  const released = withPlatforms.map(m => m.platforms.released).filter(n => n !== null && n !== undefined);
   const fetched = withPlatforms.map(m => m.platforms.fetchedAt).sort();
   return {
     fetchedAt: fetched[0] || null,
     downloads: { curseforge: sum('curseforge'), modrinth: sum('modrinth'), mods: downloads },
     perVersion,
     recentDays: RECENT_DAYS,
+    // Downloads of the releases of the last REACHED_DAYS days; null when no platform answered.
+    reached: released.length ? { downloads: released.reduce((a, b) => a + b, 0), days: REACHED_DAYS } : null,
     github,
     releases,
     latest: {
@@ -140,4 +177,4 @@ function summarize(mods, versions, now = Date.now()) {
   };
 }
 
-module.exports = { fetchPlatforms, summarize, publishState, RECENT_DAYS };
+module.exports = { fetchPlatforms, summarize, publishState, getBinary, RECENT_DAYS, REACHED_DAYS };

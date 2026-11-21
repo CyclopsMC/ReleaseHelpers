@@ -7,6 +7,7 @@
 <title>CC status</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%238c8c93'/%3E%3Cpath d='M10 16.5l4 4 8-9' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/style.css">
+<script>try { const t = localStorage.getItem('cc-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
 <header class="bar">
@@ -14,6 +15,7 @@
   <div class="summary" id="summary"></div>
   <div class="spacer"></div>
   <div class="sync" id="sync" aria-live="polite"></div>
+  <button class="btn icon theme" id="theme" aria-label="Light or dark"></button>
   <button class="btn icon" id="notify" title="Turn on notifications" aria-label="Notifications">
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2a4 4 0 0 0-4 4v2.6L2.8 11h10.4L12 8.8V6.2a4 4 0 0 0-4-4zM6.5 12.8a1.6 1.6 0 0 0 3 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
   </button>
@@ -23,6 +25,7 @@
   </button>
 </header>
 <div class="progress" id="progress"></div>
+<section class="strip" id="strip" hidden></section>
 <main class="layout" id="layout">
 <div class="main-col">
   <div id="banner"></div>

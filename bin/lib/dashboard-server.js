@@ -23,6 +23,12 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.end(data);
 }
 
+// Files that don't change while the page is open, like fonts and icons, may be cached for a while.
+function sendFile(res, file, type) {
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'max-age=3600', 'X-Content-Type-Options': 'nosniff' });
+  res.end(fs.readFileSync(file));
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -122,6 +128,18 @@ function createDashboardServer(monitor, { token, log = () => {}, actions = {} })
       let text = fs.readFileSync(path.join(STATIC_DIR, file), 'utf8');
       if (file === 'index.html') text = text.replace('__CC_TOKEN__', token);
       return send(res, 200, text, type);
+    }
+    // Bundled fonts, and the cached icons of the mods.
+    const font = req.method === 'GET' && /^\/fonts\/([a-z0-9-]+\.woff2)$/.exec(url.pathname);
+    if (font) {
+      const file = path.join(STATIC_DIR, 'fonts', font[1]);
+      if (!fs.existsSync(file)) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      return sendFile(res, file, 'font/woff2');
+    }
+    const iconName = req.method === 'GET' && /^\/icons\/([^/]+)$/.exec(url.pathname);
+    if (iconName) {
+      const icon = monitor.iconFile(decodeURIComponent(iconName[1]));
+      return icon ? sendFile(res, icon.file, icon.type) : send(res, 404, 'No icon', 'text/plain; charset=utf-8');
     }
     if (route === 'GET /api/state') return send(res, 200, monitor.snapshot());
     if (route === 'GET /api/events') {
