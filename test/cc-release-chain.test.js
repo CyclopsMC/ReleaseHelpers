@@ -389,3 +389,39 @@ test('cc-build uses the gradleOpts of the version, and --env prints them', () =>
   assert.strictEqual(r.code, 1);
   assert.match(r.err, /is not a mod checkout/);
 });
+
+// Parses its arguments like the real claude CLI: list options such as --allowedTools take every
+// value up to the next option or "--", so a prompt after them would be lost.
+const CLAUDE = `#!/usr/bin/env node
+const LIST = new Set(['--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--add-dir', '--tools']);
+const VALUE = new Set(['--permission-mode', '--model']);
+const args = process.argv.slice(2);
+const positional = [];
+for (let i = 0, list = false; i < args.length; i++) {
+  if (args[i] === '--') { positional.push(...args.slice(i + 1)); break; }
+  if (args[i].startsWith('-')) { list = LIST.has(args[i]); if (VALUE.has(args[i])) i++; continue; }
+  if (!list) positional.push(args[i]);
+}
+const print = args.includes('-p');
+if (print && !positional.length) {
+  console.error('Error: Input must be provided either through stdin or as a prompt argument when using --print');
+  process.exit(1);
+}
+const dir = require('path').basename(require('path').dirname(process.cwd()));
+require('fs').appendFileSync(process.env.CC_TEST_LOG, (print ? 'claude -p ' : 'claude ') + dir + ': ' + positional[0] + '\\n');
+`;
+
+test('passes the prompt to the default Claude commands so that they read it', () => {
+  setup();
+  const config = JSON.parse(sb.read(sb.path('cc-helpers.json')));
+  delete config.claude;
+  sb.write(sb.path('cc-helpers.json'), JSON.stringify(config));
+  sb.write(sb.path('shims', 'claude'), CLAUDE);
+  fs.chmodSync(sb.path('shims', 'claude'), 0o755);
+  // Start, bump 1.20; on 1.21 the build fails: ask Claude, then skip the build; bump 1.21.
+  const r = chain(['moda'], 'y\n\nc\ns\n\n', { CC_TEST_BUILD_FAIL: 'mc21-lts' });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(log(), /^claude mc21-lts: The build \(.+\) fails on master-1\.21-lts after upmerging origin\/master-1\.20-lts\./m);
+  assert.match(log(), /^claude -p mc21-lts: Was the upmerge in last commit correct\?/m);
+  assert.doesNotMatch(r.out + r.err, /The Claude review failed/);
+});
