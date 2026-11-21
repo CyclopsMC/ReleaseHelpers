@@ -111,7 +111,7 @@ The table has a row per mod and a column per MC version:
 - `!`: the checkout needs attention: wrong branch, uncommitted changes, unpushed commits, a merge in progress, or a last-release tag that differs from origin.
 - `-`: no checkout for this version. `?`: error, shown below the table.
 - Mods without any release (like the compat mods) are only upmerged: their cells only show `↑N`.
-- Below the table, the mods with work are grouped by the lowest MC version that needs it, which is where their release chain starts.
+- Above the table, the mods with work are grouped by the lowest MC version that needs it, which is where their release chain starts: to release first, then upmerge only, then only translations.
 
 How it stays up to date:
 
@@ -134,7 +134,7 @@ What you can do on it:
 
 Next to the table (below it on narrow screens), cards show:
 
-- **Downloads** per mod on CurseForge and Modrinth, all time.
+- **Downloads** per mod on CurseForge and Modrinth, all time, with links to each mod's projects (CF and MR).
 - **Downloads per MC version**: of the files published in the last 90 days, all mods together. It shows which MC versions players still use, to decide which ones are worth maintaining. Your CI publishes a build on every push, so a version with many builds gets a small boost.
 - **Open on GitHub**: open issues and pull requests per mod, with links. These come with the GitHub check, so they need a GitHub token.
 - **Recent releases**, each with ✓ when it is on both CurseForge and Modrinth. Below them, it says whether the last release of every mod on every version is on both, so a release whose upload failed stands out. A release younger than 2 hours that isn't on both yet gets a clock, as it may still be uploading.

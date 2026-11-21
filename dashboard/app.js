@@ -121,10 +121,11 @@ function cellTitle(mod, cell, version) {
   return `${mod.name} ${version.name}: ${parts.join(' · ')}`;
 }
 
+// Most urgent first: translations alone can wait.
 const GROUPS = [
   { key: 'todo', tone: 'release', title: 'To release', chip: n => `${n} to release` },
-  { key: 'translations', tone: 'translations', title: 'Only translations', chip: n => `${n} only translations` },
   { key: 'upmerge', tone: 'upmerge', title: 'Upmerge only', chip: n => `${n} upmerge only` },
+  { key: 'translations', tone: 'translations', title: 'Only translations', chip: n => `${n} only translations` },
 ];
 
 function select(mod, version) {
@@ -623,7 +624,7 @@ const external = (href, ...children) => h('a', { href, target: '_blank', rel: 'n
 const versionList = names => names.join(', ');
 
 // The color GitHub shows for a status, as a ring before its name.
-const statusDot = color => (color ? h('span', { class: `dot gh-${String(color).toLowerCase()}`, 'aria-hidden': 'true' }) : null);
+const statusDot = color => (color ? h('span', { class: `status-dot gh-${String(color).toLowerCase()}`, 'aria-hidden': 'true' }) : null);
 
 // One project board item: its title, then the mod, number and whether its fix is released.
 function boardItem(i, { status = false } = {}) {
@@ -673,12 +674,16 @@ function insightCards(ins) {
       h('div.kpis', null,
         h('div.kpi', null, h('div.num', null, compact(dl.curseforge)), h('div.lbl', null, 'on CurseForge')),
         h('div.kpi', null, h('div.num', null, compact(dl.modrinth)), h('div.lbl', null, 'on Modrinth'))),
-      mods.map(m => h('div.meter', {
+      mods.map(m => h('div.meter.with-links', {
         title: `${m.name}: ${full(m.curseforge)} on CurseForge, ${full(m.modrinth)} on Modrinth${m.followers !== null ? `, ${m.followers} followers on Modrinth` : ''}`,
       },
       h('span.name', null, m.name),
       h('div.track', null, h('div.fill', { style: `width: ${(total(m) / max) * 100}%` })),
-      h('span.val', null, compact(total(m))))),
+      h('span.val', null, compact(total(m))),
+      // The projects, as CF and MR, the usual short names, to leave room for the bar.
+      h('span.links', null,
+        m.urls.curseforge ? h('a', { href: m.urls.curseforge, target: '_blank', rel: 'noopener', title: `${m.name} on CurseForge` }, 'CF') : h('span'),
+        m.urls.modrinth ? h('a', { href: m.urls.modrinth, target: '_blank', rel: 'noopener', title: `${m.name} on Modrinth` }, 'MR') : h('span')))),
       ins.errors.length ? h('p.note.warn', { title: ins.errors.join('\n') }, `Some numbers are missing: ${ins.errors.length} request${ins.errors.length === 1 ? '' : 's'} failed (hover for details).`) : null,
       ins.fetchedAt ? h('p.note', null, `Updated ${ago(ins.fetchedAt)}.`) : null));
 

@@ -228,7 +228,8 @@ main { padding: 20px 24px 40px; }
 }
 .cell.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 18px; }
+.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.groups:empty { display: none; }
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -453,6 +454,11 @@ main { padding: 20px 24px 40px; }
 .meter .track { height: 8px; }
 .meter .fill { height: 8px; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
 .meter .val { text-align: right; font-variant-numeric: tabular-nums; }
+/* The name gives way before the bar does. */
+.meter.with-links { grid-template-columns: minmax(0, 132px) minmax(40px, 1fr) 48px auto; }
+.meter .links { display: grid; grid-template-columns: 24px 24px; gap: 3px; }
+.meter .links a { font-size: 10.5px; font-weight: 600; text-align: center; padding: 1px 0; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+.meter .links a:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 .insights .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
 .insights .note.warn { color: var(--danger); }
 .mini { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -490,7 +496,7 @@ main { padding: 20px 24px 40px; }
 .items .title a:hover, .board-items .title a:hover { color: var(--accent); }
 
 /* A status color, like GitHub draws it: a ring with a light fill. */
-.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; box-sizing: border-box;
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; box-sizing: border-box;
   border: 2px solid var(--dot); background: color-mix(in srgb, var(--dot) 22%, transparent); }
 .gh-gray { --dot: var(--gh-gray); } .gh-blue { --dot: var(--gh-blue); } .gh-green { --dot: var(--gh-green); } .gh-yellow { --dot: var(--gh-yellow); }
 .gh-orange { --dot: var(--gh-orange); } .gh-red { --dot: var(--gh-red); } .gh-pink { --dot: var(--gh-pink); } .gh-purple { --dot: var(--gh-purple); }
