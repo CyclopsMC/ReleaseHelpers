@@ -96,7 +96,3 @@ Fixes:
 - Entries that are already in an earlier changelog of the same MC version are left out (e.g. backports).
 - `# ...` lines say where each group of entries comes from, and list what was left out and why.
 
-`cc-changelog-draft` prints the draft for the current checkout (`--since <tag>`, `--source <branch|none>`, `--no-comments`).
-
-`cc-changelog-confirm` (run by `cc-release`) now first runs `cc-changelog-finalize`, which removes the `#` lines and empty sections, and stops the release if the changelog still has a `TODO` marker, a `Bump ... version` entry, merge conflict markers, or no entries.
-
