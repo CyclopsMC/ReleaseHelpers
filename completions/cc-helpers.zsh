@@ -5,6 +5,18 @@ if ! (( $+functions[compdef] )); then
   autoload -Uz compinit && compinit
 fi
 
+_cc_helpers_mods() {
+  local -a mods
+  mods=(${(f)"$(cc-release-chain --list-mods 2>/dev/null)"})
+  _describe -t mods 'mod' mods
+}
+
+_cc_helpers_versions() {
+  local -a versions
+  versions=(${(f)"$(cc-release-chain --list-versions 2>/dev/null)"})
+  _describe -t versions 'version' versions
+}
+
 _cc_mark() {
   if (( CURRENT == 2 )); then
     local -a actions
@@ -26,4 +38,23 @@ _cc_mark() {
   fi
 }
 
+_cc_release_chain() {
+  _arguments -s \
+    '--rehearse[run on copies, pushing to a local stand-in for origin]' \
+    '--confirm[ask before pushing each release]' \
+    '--no-review[do not ask Claude to review clean upmerges]' \
+    '--no-build[do not build]' \
+    '(- *)'{-h,--help}'[show help]' \
+    '1:mod:_cc_helpers_mods' \
+    '2:version:_cc_helpers_versions'
+}
+
+_cc_build() {
+  _arguments -s \
+    '--env[print an export line for GRADLE_OPTS]' \
+    '(- *)'{-h,--help}'[show help]'
+}
+
 compdef _cc_mark cc-mark
+compdef _cc_release_chain cc-release-chain
+compdef _cc_build cc-build

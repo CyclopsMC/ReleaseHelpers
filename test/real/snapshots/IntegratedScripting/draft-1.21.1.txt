@@ -1,0 +1,79 @@
+As always, don't forget to backup your world before updating!
+Requires CyclopsCore version 1.25.5 or higher.
+
+# Draft made by cc-changelog-draft: review every entry. Lines starting with # are removed on release.
+Additions:
+
+Changes:
+# only on master-1.21-lts
+* Resolve value translators for round-tripped Graal proxies directly
+  Values that a script passes back unchanged are Graal proxies wrapping an
+  Integrated Dynamics value, so their translator is known up front, but they
+  still went through the full translator scan to find it.
+  Graal proxies wrapping such a value now report their value type through
+  IValueProxy, which lets the registry look their translator up in two calls
+  on the Graal value instead of scanning.
+  Median of 3 paired runs:
+  Proxy-unwrapItem             1.28us -> 0.54us (-58%)
+  Operator-callJsFromId-item   1.71us -> 1.03us (-40%)
+  Proxy-unwrapNbt              0.93us -> 0.56us (-39%)
+* Dispatch object value translators on their member key
+  Determining which translator handles a Graal value scanned all
+  translators in order, and each of the six object translators materialized
+  the value's member keys to compare them against its own single key. For a
+  plain object that meant six member key sets and six host boundary
+  crossings before the NBT translator was even reached.
+  Translators can now report the single member key they dispatch on, so the
+  registry materializes the member key set once and matches all of them
+  against it. The translator list and their keys are snapshotted on
+  registration, so dispatching doesn't repeat the lookups either.
+  Median of 3 paired runs:
+  FromGraal-nbt     10.63us -> 7.56us (-29%)
+  FromGraal-item     5.10us -> 3.73us (-27%)
+  This does regress values that were translated to Graal before, since the
+  object translators used to detect their own proxies before looking at any
+  member keys:
+  Proxy-unwrapItem   0.59us -> 1.17us (+99%)
+  The next commit more than makes up for that by resolving such values from
+  their proxy directly.
+* Unwrap Graal proxies with instanceof instead of ClassCastException
+  The translators that unwrap values which were translated to Graal before
+  cast the proxy and caught the resulting ClassCastException to detect a
+  mismatch. Since the translators are tried in order, translating any proxy
+  threw and caught up to seven exceptions before reaching its own
+  translator, each with the stack trace fill-in that entails.
+  Proxy-unwrapNbt    2.67us -> 1.10us (-59%)
+* Lazily populate idContext.ops in script contexts
+  Every created script context eagerly translated all 276 global interact
+  operators into idContext.ops, which took longer than the rest of the
+  script instantiation combined, while many scripts use only a handful of
+  them, or none at all.
+  The ops object is now defined as a self-replacing lazy getter, so that it
+  is only built once a script actually accesses it. After the first access
+  it is a plain data property again, so repeated idContext.ops accesses stay
+  as fast as before. Exposing ops as a host proxy object instead would have
+  made every access cross the host boundary, which measured ~9% slower per
+  operator call.
+  Script-instantiate         388us -> 197us (-49%)
+  Context-createPopulated    425us -> 259us (-39%)
+  Instantiating a script that does use idContext.ops becomes ~8% slower, as
+  it now pays for the lazy getter on top of building the ops object.
+
+Fixes:
+# from 1.20.1-1.0.19
+* Register one script change listener per script instead of per error (#74), Closes #67
+* Translate script values back to NBT when an operator expects NBT (#73), Closes #67
+# only on master-1.21-lts
+* Fix error when using regexes (#72), Closes #68
+* Don't overwrite the exports binding when translating an NBT end tag
+  Translating an NBT end tag to Graal evaluated
+  "exports = { 'nbt_end': true }", which assigns to the global exports
+  binding, and thereby silently discarded whatever the script itself had
+  exported.
+  It now uses a proxy object with the same single member, which as a side
+  effect also removes a JS parse and evaluation from that path.
+
+# Left out:
+#   6b2a12e6a Document clientdevbridge-cli in AGENTS.md (only dev files)
+#   941f7daaf Symlink CLAUDE.md to AGENTS.md (only dev files)
+#   346da2994 Add benchmark for the full JS script evaluation pipeline (only dev files)

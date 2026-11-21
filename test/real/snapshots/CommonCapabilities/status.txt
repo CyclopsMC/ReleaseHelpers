@@ -1,0 +1,4 @@
+                    1.21-lts  26-lts
+CommonCapabilities         1     1↑1
+
+CommonCapabilities: todo, starting at 1.21-lts

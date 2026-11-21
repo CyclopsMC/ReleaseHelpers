@@ -1,0 +1,57 @@
+#!/usr/bin/env node
+'use strict';
+// Builds the mod checkout in the current dir with the Gradle settings of its MC version.
+
+const { loadConfig } = require('./lib/config');
+const { versionForDir, runBuild, gradleOptsEnv, buildCommand } = require('./lib/build');
+
+const HELP = `Usage: cc-build [--env] [args...]
+
+Builds the mod checkout in the current dir, with the "gradleOpts" of its MC version from
+~/.config/cc-helpers.json passed through GRADLE_OPTS. Extra args are added to the build command
+(default: ./gradlew build), e.g. cc-build -x test.
+
+Options:
+  --env       Print an export line for GRADLE_OPTS instead, for: eval "$(cc-build --env)"
+  -h, --help  Show this help
+`;
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+const shellQuote = s => `'${s.replace(/'/g, "'\\''")}'`;
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args[0] === '-h' || args[0] === '--help') {
+    process.stdout.write(HELP);
+    return;
+  }
+  let config;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    fail(e.message);
+  }
+  const cwd = process.cwd();
+  const version = versionForDir(config, cwd);
+  if (!version) fail(`${cwd} is not a mod checkout in one of the version dirs of ${config.file}`);
+
+  let opts;
+  try {
+    opts = gradleOptsEnv(version);
+  } catch (e) {
+    fail(`${config.file}: ${e.message}`);
+  }
+  if (args[0] === '--env') {
+    process.stdout.write(`export GRADLE_OPTS=${shellQuote(opts)}\n`);
+    return;
+  }
+  process.stderr.write(`${version.name}: ${buildCommand(config, args).join(' ')}${opts ? ` (GRADLE_OPTS=${opts})` : ''}\n`);
+  const { code } = await runBuild({ config, version, cwd, extraArgs: args });
+  process.exitCode = code;
+}
+
+main().catch(e => fail(e.stack || e.message));
