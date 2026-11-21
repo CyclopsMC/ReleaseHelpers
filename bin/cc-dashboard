@@ -1,0 +1,206 @@
+#!/usr/bin/env node
+'use strict';
+// A page with the live status of all mods, kept up to date in the background.
+
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
+const { loadConfig, configPath } = require('./lib/config');
+const { Monitor } = require('./lib/monitor');
+const { createDashboardServer } = require('./lib/dashboard-server');
+const { createActions } = require('./lib/dashboard-actions');
+const { runningDashboard, writeInfo, removeInfo } = require('./lib/dashboard-client');
+const { stateDir } = require('./lib/lock');
+
+const DEFAULT_PORT = 7341;
+const LABEL = 'com.cyclopsmc.cc-dashboard';
+
+const HELP = `Usage: cc-dashboard [--port <n>] [--open]
+       cc-dashboard <open|install|uninstall>
+
+Serves a page with the release status of every mod on http://127.0.0.1:${DEFAULT_PORT}/ and keeps it
+up to date: checkouts are watched for changes, GitHub is asked what changed every few minutes, and
+only those checkouts are fetched. Click a cell to see its commits, mark them, or start a release chain.
+
+  (no command)  run in this terminal; Ctrl-C stops it
+  open          open the page of the running dashboard in your browser
+  install       run it in the background from now on, also after login (macOS);
+                run it again to restart it with the current code
+  uninstall     stop that
+
+Options:
+  --port <n>    port to listen on (default: "dashboard": { "port" } in the config, or ${DEFAULT_PORT})
+  --open        open the page once it runs
+`;
+
+function fail(message) {
+  process.stderr.write(`${message.trimEnd()}\n`);
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const opts = { command: 'run', port: null, open: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port') {
+      opts.port = Number(argv[++i]);
+      if (!Number.isInteger(opts.port) || opts.port < 0 || opts.port > 65535) fail('--port needs a port number');
+    } else if (a === '--open') opts.open = true;
+    else if (a === '-h' || a === '--help') {
+      process.stdout.write(HELP);
+      process.exit(0);
+    } else if (['open', 'install', 'uninstall'].includes(a) && opts.command === 'run') opts.command = a;
+    else fail(`Unknown argument ${a}\n\n${HELP}`);
+  }
+  return opts;
+}
+
+function openUrl(url) {
+  const cmd = process.platform === 'darwin' ? 'open' : (process.platform === 'win32' ? 'explorer' : 'xdg-open');
+  const child = spawn(cmd, [url], { stdio: 'ignore', detached: true });
+  child.on('error', () => console.log(`Open ${url} in your browser.`));
+  child.unref();
+}
+
+const urlOf = info => `http://127.0.0.1:${info.port}/`;
+
+async function run(opts) {
+  const existing = runningDashboard();
+  if (existing) fail(`The dashboard already runs (pid ${existing.pid}) on ${urlOf(existing)}`);
+  let configured = null;
+  try {
+    configured = (loadConfig().dashboard || {}).port;
+  } catch (e) {
+    // The page shows config problems.
+  }
+  const port = opts.port ?? configured ?? DEFAULT_PORT;
+  const log = msg => console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+  const monitor = new Monitor({ log });
+  const token = crypto.randomBytes(24).toString('hex');
+  const dashboard = createDashboardServer(monitor, { token, log, actions: createActions(monitor) });
+  let actual;
+  try {
+    actual = await dashboard.listen(port);
+  } catch (e) {
+    if (e.code === 'EADDRINUSE') fail(`Port ${port} is in use. Pick another one with --port, or "dashboard": { "port": ... } in the config.`);
+    throw e;
+  }
+  const info = { pid: process.pid, port: actual, token, configFile: configPath() };
+  writeInfo(info);
+  log(`Dashboard on ${urlOf(info)}`);
+  if (opts.open) openUrl(urlOf(info));
+
+  let stopping = false;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    removeInfo(process.pid);
+    monitor.stop();
+    dashboard.close().then(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  process.on('exit', () => removeInfo(process.pid));
+  await monitor.start();
+}
+
+function open() {
+  const info = runningDashboard();
+  if (!info) fail('The dashboard is not running. Start it with cc-dashboard, or cc-dashboard install to keep it running.');
+  openUrl(urlOf(info));
+}
+
+const agentsDir = () => process.env.CC_HELPERS_LAUNCH_AGENTS || path.join(os.homedir(), 'Library', 'LaunchAgents');
+const plistPath = () => path.join(agentsDir(), `${LABEL}.plist`);
+const xml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function launchctl(args) {
+  return spawnSync('launchctl', args, { encoding: 'utf8' });
+}
+
+function checkLaunchd() {
+  if (process.platform !== 'darwin' && !process.env.CC_HELPERS_LAUNCH_AGENTS) {
+    fail('install only works on macOS. Elsewhere, start cc-dashboard from your own service manager.');
+  }
+}
+
+// The pid of the installed dashboard, if launchd runs it.
+function agentPid() {
+  const r = launchctl(['print', `gui/${process.getuid()}/${LABEL}`]);
+  const m = /^\s*pid = (\d+)/m.exec(r.stdout || '');
+  return m ? Number(m[1]) : null;
+}
+
+const alive = pid => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+// Installs the dashboard as a launch agent, or restarts the installed one with the current code.
+async function install(opts) {
+  checkLaunchd();
+  const existing = runningDashboard();
+  const restart = !!existing && existing.pid === agentPid();
+  if (existing && !restart) fail(`Stop the running dashboard first (pid ${existing.pid}), so the background one can use its port.`);
+  // Keep the environment that finds git, gh and your config.
+  const env = { PATH: process.env.PATH };
+  for (const k of ['CC_HELPERS_CONFIG', 'CC_HELPERS_STATE_DIR', 'CC_HELPERS_MARKS', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
+  fs.mkdirSync(stateDir(), { recursive: true });
+  const logFile = path.join(stateDir(), 'dashboard.log');
+  const args = [process.execPath, path.resolve(__filename), ...(opts.port === null ? [] : ['--port', String(opts.port)])];
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+${args.map(a => `    <string>${xml(a)}</string>`).join('\n')}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${Object.entries(env).map(([k, v]) => `    <key>${xml(k)}</key><string>${xml(v)}</string>`).join('\n')}
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>${xml(logFile)}</string>
+  <key>StandardErrorPath</key><string>${xml(logFile)}</string>
+</dict>
+</plist>
+`;
+  fs.mkdirSync(agentsDir(), { recursive: true });
+  fs.writeFileSync(plistPath(), plist);
+  const domain = `gui/${process.getuid()}`;
+  launchctl(['bootout', `${domain}/${LABEL}`]);
+  // The old one has to free its port first.
+  for (let i = 0; restart && alive(existing.pid) && i < 100; i++) await new Promise(r => setTimeout(r, 100));
+  if (restart && alive(existing.pid)) fail(`The installed dashboard (pid ${existing.pid}) did not stop.`);
+  const r = launchctl(['bootstrap', domain, plistPath()]);
+  if (r.status !== 0) fail(`launchctl bootstrap failed: ${(r.stderr || '').trim()}`);
+  console.log(`${restart ? 'Restarted the dashboard in the background, with the current code.' : 'The dashboard now runs in the background, and starts at login.'}
+Open it with: cc-dashboard open
+Its log: ${logFile}`);
+}
+
+function uninstall() {
+  checkLaunchd();
+  launchctl(['bootout', `gui/${process.getuid()}/${LABEL}`]);
+  const existed = fs.existsSync(plistPath());
+  fs.rmSync(plistPath(), { force: true });
+  console.log(existed ? 'The dashboard no longer runs in the background.' : 'The dashboard was not installed.');
+}
+
+const opts = parseArgs(process.argv.slice(2));
+Promise.resolve()
+  .then(() => ({ run, open, install, uninstall })[opts.command](opts))
+  .catch(e => fail(e.stack || e.message));

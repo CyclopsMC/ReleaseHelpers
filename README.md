@@ -4,7 +4,7 @@ Scripts to help automate Cyclops mod releases.
 ## Setup
 
 Add `bin/` to your `PATH`.
-The Node.js scripts (`cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
+The Node.js scripts (`cc-dashboard`, `cc-mark`, `cc-changelog-draft`, `cc-changelog-finalize`, `cc-build`, `cc-release-chain`, `cc-update-versions`) need Node.js 18 or higher.
 `cc-update-versions` also needs `npm install` in `bin/`.
 
 ### Config
@@ -84,6 +84,88 @@ For the commits the filter can't tell apart, e.g. a build change that also touch
   In a mod checkout, it is for that checkout's version unless you say otherwise. `--version` can be given more than once, and `--all-versions` marks it for every version (a mark for one version wins over that).
   `cc-mark release <commit>` does the opposite (a commit that the filter drops, but needs a release), `cc-mark clear <commit>` removes its marks (or only those of `--version`), and `cc-mark list` shows them all.
   Marks are stored in `~/.local/share/cc-helpers/marks.json`, by full commit hash and branch. Upmerges keep hashes, so a mark for 26-lts also applies while the commit is still waiting to be upmerged into 26-lts.
+
+## cc-dashboard
+
+A page with the status of every mod on every maintained MC version, kept up to date, to keep open in a browser tab:
+
+```bash
+cc-dashboard install
+```
+```bash
+cc-dashboard open
+```
+
+`install` runs it in the background from now on, also after login (macOS); `cc-dashboard uninstall` stops that. You can also just run `cc-dashboard` in a terminal.
+
+- It runs the code of this checkout, with the `node` and the `PATH` you install it with. Run `cc-dashboard install` again after pulling new code, or after `gh auth refresh`: it restarts the installed dashboard.
+- `cc-dashboard install --port <n>` keeps that port; otherwise it uses `"dashboard": { "port" }` from the config, or 7341.
+- If `GH_TOKEN` or `GITHUB_TOKEN` is set when you install it, the token is stored in plain text in `~/Library/LaunchAgents/com.cyclopsmc.cc-dashboard.plist`. Without them, it asks `gh` for the token when it starts.
+
+The table has a row per mod and a column per MC version:
+
+- `N`: unreleased commits since the last release on that branch.
+- `↑N`: commits on lower maintained branches that this branch doesn't have yet (to upmerge).
+- `t`: all of those commits are translations.
+- `new`: no release on this MC version yet.
+- `!`: the checkout needs attention: wrong branch, uncommitted changes, unpushed commits, a merge in progress, or a last-release tag that differs from origin.
+- `-`: no checkout for this version. `?`: error, shown below the table.
+- Mods without any release (like the compat mods) are only upmerged: their cells only show `↑N`.
+- A strip at the top says how many mods are up to date, what you shipped in the last 30 days (releases, their fixes, additions and changes from the changelogs, how often they were downloaded, and releases per week with your streak), and what is ready to ship: the changes waiting for players per mod, with the version its release chain starts at. Click a mod there to open it.
+- Below it, the mods that only need an upmerge, or only have new translations, are grouped by the lowest MC version that needs it.
+
+How it stays up to date:
+
+- It watches the `.git` folder of every checkout, so commits, branch switches, fetches and upmerges show within a second. Edits in the working tree (the `!` for uncommitted changes) show within a minute, or as soon as you look at the page.
+- With a GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`, or the one of the [GitHub CLI](https://cli.github.com/), `gh auth login`), it asks GitHub every 2 minutes for the branches, recent tags and CI states of all mods, in one request, and only fetches the checkouts where something changed. Once an hour it fetches everything.
+- Without a token, it fetches everything every 10 minutes, and shows no CI states.
+- It doesn't fetch the checkouts of a mod while a release chain for that mod runs.
+- **Refresh** asks GitHub and fetches right away; Shift-click fetches every checkout.
+
+What you can do on it:
+
+- Click a cell to see its commits: the unreleased ones, the ones to upmerge, and the ones the filter left out (with the reason). Click a commit for its message, files and diff.
+- **Marking commits**: click **No release** next to a commit (e.g. a build change that touched a source file), or **Needs release** on one the filter left out, then choose whether it is for the version of the cell or for all versions. **Unmark** undoes it. These are the same marks as `cc-mark` makes.
+- **Release chains**: **Start release chain** opens a terminal with `cc-release-chain <mod>`, and **Rehearse** with `--rehearse`. **Ask before each push** adds `--confirm`. **Terminal** and **IDE** open the checkout of the selected version.
+- Running chains show their step in the table, e.g. `26-lts: building`, or `waiting for you` when they ask something, wait for your editor, or run Claude interactively.
+- Mods are ordered by their dependencies (by `<mod>_version` properties, as in `cc-release-chain`), and say which ones they wait for: dependencies with changes to release or a running chain.
+- With a GitHub token, a red dot on a cell means CI failed on that branch, or for its last release (so it may not be published). The panel shows both states with links. Only GitHub Actions counts, by the latest run of each workflow that a push started: other checks, like Coveralls, and scheduled or issue workflows are left out.
+- The bell turns on browser notifications: when a mod gets work to release, CI fails, or a chain starts waiting for you.
+- It follows your system's light or dark mode; the button next to the bell switches to light, dark, or back to the system (remembered in that browser).
+- Mods show their icon from Modrinth or CurseForge, downloaded once to `~/.cache/cc-helpers/icons/`. The fonts (IBM Plex, SIL Open Font License) ship with the dashboard, so it works offline.
+- The tab title shows how many mods need a release or an upmerge, e.g. `(3) CC Dashboard`. The tab icon is green when none do (translations alone don't count), orange when some do, and red on errors or failing CI.
+
+Next to the table (below it on narrow screens), cards show:
+
+- **Downloads** per mod on CurseForge and Modrinth, all time, with links to each mod's projects (CF and MR).
+- **Downloads per MC version**: of the files published in the last 90 days, all mods together. It shows which MC versions players still use, to decide which ones are worth maintaining. Your CI publishes a build on every push, so a version with many builds gets a small boost.
+- **Open on GitHub**: open issues and pull requests per mod, with links. These come with the GitHub check, so they need a GitHub token.
+- **Recent releases**, each with ✓ when it is on both CurseForge and Modrinth. Below them, it says whether the last release of every mod on every version is on both, so a release whose upload failed stands out. A release younger than 2 hours that isn't on both yet gets a clock, as it may still be uploading.
+
+The projects are the `curseforge_project_id` and `modrinth_project_id` in each mod's `gradle.properties`. CurseForge's own API needs a key, so the numbers come from [cfwidget](https://cfwidget.com/), like `cc-latest-curse` does, and from Modrinth's public API. They are fetched at start and every hour, a new release within a minute, and a release that may still be uploading again every 10 minutes, and kept in `~/.cache/cc-helpers/insights.json`. The mod panel links to the mod on CurseForge and Modrinth.
+
+With `dashboard.projects` set to GitHub project boards, a card per board shows above those:
+
+- Its open items per status column, the furthest along first, each with its mod and a link. Columns get the color they have on GitHub. Issues with upvotes (👍 reactions) show how many. Done items (the last status, or a closed issue) are only counted.
+- **Done, not released yet**: done items that a commit not released yet closes (`Closes #12`, or the `(#34)` of a merged pull request), with the versions still to release them on.
+- The panel of a mod lists its open items on the boards.
+
+```json
+"dashboard": { "projects": ["https://github.com/orgs/CyclopsMC/projects/3", "https://github.com/orgs/CyclopsMC/projects/4"] }
+```
+
+Boards are read every 10 minutes and on Refresh. The GitHub token needs the `read:project` scope, which `gh auth login` doesn't give by default: `gh auth refresh -s read:project`.
+
+It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
+
+Optional settings under `"dashboard"` in the config:
+- `terminal`: where the buttons open terminals: `"Terminal"` (the default on macOS), `"iTerm"`, or a command where `{cmd}` is the command line to run, e.g. `["kitty", "sh", "-c", "{cmd}; exec $SHELL"]`.
+  The first time, macOS asks whether node may control Terminal (or iTerm); allow it.
+- `ide`: a command to open a checkout, where `{dir}` is its path, e.g. `["idea", "{dir}"]` or `["open", "-a", "IntelliJ IDEA", "{dir}"]`. Without it, there is no IDE button.
+- `insights`: `false` to leave out the cards, so nothing is asked of CurseForge and Modrinth.
+- `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600), `fetchAllWithoutGitHub` (600), `insightsInterval` (3600) and `projectsInterval` (600).
+
+`"github": false` at the top level of the config stops it from asking GitHub; it then fetches everything every 10 minutes.
 
 ## Changelog drafts
 

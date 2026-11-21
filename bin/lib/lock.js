@@ -88,4 +88,4 @@ async function acquireBuildSlot(max, onWait) {
   }
 }
 
-module.exports = { tryLock, unlock, modLockDir, modLockOwner, acquireBuildSlot, stateDir };
+module.exports = { tryLock, unlock, modLockDir, modLockOwner, acquireBuildSlot, stateDir, isAlive };

@@ -55,6 +55,15 @@ _cc_build() {
     '(- *)'{-h,--help}'[show help]'
 }
 
+_cc_dashboard() {
+  _arguments -s \
+    '--port[port to listen on]:port:' \
+    '--open[open the page once it runs]' \
+    '(- *)'{-h,--help}'[show help]' \
+    '1:command:((open\:"open the page" install\:"run in the background, also after login" uninstall\:"stop running in the background"))'
+}
+
 compdef _cc_mark cc-mark
 compdef _cc_release_chain cc-release-chain
 compdef _cc_build cc-build
+compdef _cc_dashboard cc-dashboard

@@ -430,14 +430,17 @@ test("shows Claude's review in its own color", () => {
   setup();
   const config = JSON.parse(sb.read(sb.path('cc-helpers.json')));
   const review = sb.path('tools', 'review-talks');
-  sb.write(review, '#!/bin/sh\necho "Looks right."\necho "Verdict: fine"\necho "a warning" >&2\n');
+  // The pause splits the output in two chunks, as a real Claude often does.
+  sb.write(review, '#!/bin/sh\necho "Looks right."\nsleep 0.3\necho "Verdict: fine"\necho "a warning" >&2\n');
   fs.chmodSync(review, 0o755);
   config.claude.review = [review];
   sb.write(sb.path('cc-helpers.json'), JSON.stringify(config));
   const r = chain(['moda'], 'y\n\n\n', { FORCE_COLOR: '1', NO_COLOR: '' });
   assert.strictEqual(r.code, 0, r.out + r.err);
   const magenta = text => new RegExp(`\\x1b\\[35m[^\\x1b]*${text}`);
-  assert.match(r.out, magenta('Looks right\\.\\nVerdict: fine'));
+  // Each chunk is colored on its own, so both lines are, however the output arrives.
+  assert.match(r.out, magenta('Looks right\\.'));
+  assert.match(r.out, magenta('Verdict: fine'));
   assert.match(r.err, magenta('a warning'));
   // The chain's own lines around it keep their colors.
   assert.doesNotMatch(r.out, magenta('Asking Claude'));

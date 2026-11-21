@@ -35,8 +35,9 @@ function createSandbox(prefix) {
     GIT_CONFIG_NOSYSTEM: '1',
     PATH: `${shims}${path.delimiter}${BIN}${path.delimiter}${process.env.PATH}`,
     NO_COLOR: '1',
-    // Never your own marks.
+    // Never your own marks, locks or dashboard.
     CC_HELPERS_MARKS: path.join(dir, 'marks.json'),
+    CC_HELPERS_STATE_DIR: path.join(dir, 'state'),
   };
   // Distinct, increasing commit dates keep `git log` order deterministic.
   let time = 1700000000;

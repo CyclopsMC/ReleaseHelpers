@@ -36,6 +36,18 @@ _cc_build() {
   COMPREPLY=($(compgen -W "--env -h --help" -- "${COMP_WORDS[COMP_CWORD]}"))
 }
 
+_cc_dashboard() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  if [[ "${COMP_WORDS[COMP_CWORD-1]}" == "--port" ]]; then
+    COMPREPLY=()
+  elif [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "--port --open -h --help" -- "$cur"))
+  else
+    COMPREPLY=($(compgen -W "open install uninstall" -- "$cur"))
+  fi
+}
+
 complete -F _cc_mark cc-mark
 complete -F _cc_release_chain cc-release-chain
 complete -F _cc_build cc-build
+complete -F _cc_dashboard cc-dashboard

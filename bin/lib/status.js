@@ -195,7 +195,9 @@ async function cellStatus({ repoDir, version, lowerBranches, fetch, filter: conf
   // The last release decides what counts as unreleased; other differing tags don't matter here.
   if (lastRelease && clobbered.includes(lastRelease)) local.push(describeClobbered([lastRelease]));
   const otherDifferingTags = clobbered.filter(t => t !== lastRelease);
-  return { mc, modVersion, lastRelease, unreleased, pending, local, otherDifferingTags };
+  // `<mod>_version` properties name the mods this one depends on, as in cc-release-chain.
+  const depKeys = Object.keys(props).filter(k => /_version$/.test(k)).map(k => k.slice(0, -'_version'.length).toLowerCase());
+  return { mc, modVersion, lastRelease, unreleased, pending, local, otherDifferingTags, depKeys };
 }
 
 // User-facing commits that a release chain starting here would pick up.
@@ -218,27 +220,35 @@ function checkouts(config, { mods, byVersion }) {
 }
 
 // Asks GitHub which checkouts have new commits or tags on origin, in one request.
-// Returns { toFetch: Set of repo dirs, total }, { error } if GitHub couldn't tell, or null
-// without a GitHub token.
-async function planFetches(config, found) {
+// Returns { toFetch: Set of repo dirs, total, refsByMod: Map mod -> refs }, { error } if GitHub
+// couldn't tell, or null without a GitHub token. With `health`, refs also have the CI states of
+// the branch heads and of the tags in `releases` ({ mod: [tag] }), see remoteRefs.
+async function planFetches(config, found, { health = false, releases = {} } = {}) {
   const token = githubToken();
   if (!token) return null;
   const list = checkouts(config, found);
   const repoOf = new Map(list.map(c => [c.repoDir, githubRepo(originUrl(c.repoDir))]));
-  const repos = [...new Map([...repoOf.values()].filter(Boolean).map(r => [`${r.owner}/${r.name}`.toLowerCase(), r])).values()];
+  const repos = new Map();
+  for (const c of list) {
+    const r = repoOf.get(c.repoDir);
+    const key = r && `${r.owner}/${r.name}`.toLowerCase();
+    if (key && !repos.has(key)) repos.set(key, { ...r, releases: releases[c.mod] || [] });
+  }
   let remote;
   try {
-    remote = await remoteRefs(repos, token);
+    remote = await remoteRefs([...repos.values()], token, { health });
   } catch (e) {
     return { error: e.message };
   }
   const toFetch = new Set();
+  const refsByMod = new Map();
   await runPool(list.map(c => async () => {
     const r = repoOf.get(c.repoDir);
     const refs = r && remote.get(`${r.owner}/${r.name}`.toLowerCase());
+    if (refs) refsByMod.set(c.mod, refs);
     if (!refs || await differsFromRemote(c, refs)) toFetch.add(c.repoDir);
   }), config.jobs || 8);
-  return { toFetch, total: list.length };
+  return { toFetch, total: list.length, refsByMod };
 }
 
 async function differsFromRemote({ repoDir, version, lowerBranches }, { heads, tags }) {
@@ -310,6 +320,6 @@ function cellText(cell, upmergeOnly) {
 }
 
 module.exports = {
-  discoverMods, checkVersionDirs, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing, isUpmergeOnly, modWork,
-  cellText, fetchBranches,
+  discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, cellStatus, chainStart, cellUserFacing,
+  isUpmergeOnly, modWork, cellText, fetchBranches, originUrl,
 };
