@@ -90,7 +90,7 @@ Fixes:
 #   39a62925b Make battery-related game tests more robust (only dev files)
 ```
 
-- Commits upmerged from the branch in `../.upmerge-src-branch` reuse the entries of the source release that contains them, so your edits there (rewording, merged entries, extra details) carry over. Entries you removed there stay removed.
+- Commits upmerged from the branch in `../.upmerge-src-branch` reuse the entries of the source release that contains them.
 - Other commits are drafted from their message: `Closes #x`-style lines are folded into the entry, the rest of the body is indented, and the section is picked from the first word (Fix, Remove, ... go to Fixes; Add, Allow, Show, ... to Additions; the rest to Changes).
 - `Bump compat version` commits contribute the entries listed in their message, and translation commits become "Add translations through Crowdin".
 - Entries that are already in an earlier changelog of the same MC version are left out (e.g. backports).
