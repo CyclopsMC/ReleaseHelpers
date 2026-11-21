@@ -26,7 +26,8 @@ only those checkouts are fetched. Click a cell to see its commits, mark them, or
 
   (no command)  run in this terminal; Ctrl-C stops it
   open          open the page of the running dashboard in your browser
-  install       run it in the background from now on, also after login (macOS)
+  install       run it in the background from now on, also after login (macOS);
+                run it again to restart it with the current code
   uninstall     stop that
 
 Options:
@@ -126,10 +127,28 @@ function checkLaunchd() {
   }
 }
 
-function install() {
+// The pid of the installed dashboard, if launchd runs it.
+function agentPid() {
+  const r = launchctl(['print', `gui/${process.getuid()}/${LABEL}`]);
+  const m = /^\s*pid = (\d+)/m.exec(r.stdout || '');
+  return m ? Number(m[1]) : null;
+}
+
+const alive = pid => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
+// Installs the dashboard as a launch agent, or restarts the installed one with the current code.
+async function install(opts) {
   checkLaunchd();
   const existing = runningDashboard();
-  if (existing) fail(`Stop the running dashboard first (pid ${existing.pid}), so the background one can use its port.`);
+  const restart = !!existing && existing.pid === agentPid();
+  if (existing && !restart) fail(`Stop the running dashboard first (pid ${existing.pid}), so the background one can use its port.`);
   // Keep the environment that finds git, gh and your config.
   const env = { PATH: process.env.PATH };
   for (const k of ['CC_HELPERS_CONFIG', 'CC_HELPERS_STATE_DIR', 'CC_HELPERS_MARKS', 'GH_TOKEN', 'GITHUB_TOKEN']) {
@@ -137,6 +156,7 @@ function install() {
   }
   fs.mkdirSync(stateDir(), { recursive: true });
   const logFile = path.join(stateDir(), 'dashboard.log');
+  const args = [process.execPath, path.resolve(__filename), ...(opts.port === null ? [] : ['--port', String(opts.port)])];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -144,8 +164,7 @@ function install() {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xml(process.execPath)}</string>
-    <string>${xml(path.resolve(__filename))}</string>
+${args.map(a => `    <string>${xml(a)}</string>`).join('\n')}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -163,9 +182,12 @@ ${Object.entries(env).map(([k, v]) => `    <key>${xml(k)}</key><string>${xml(v)}
   fs.writeFileSync(plistPath(), plist);
   const domain = `gui/${process.getuid()}`;
   launchctl(['bootout', `${domain}/${LABEL}`]);
+  // The old one has to free its port first.
+  for (let i = 0; restart && alive(existing.pid) && i < 100; i++) await new Promise(r => setTimeout(r, 100));
+  if (restart && alive(existing.pid)) fail(`The installed dashboard (pid ${existing.pid}) did not stop.`);
   const r = launchctl(['bootstrap', domain, plistPath()]);
   if (r.status !== 0) fail(`launchctl bootstrap failed: ${(r.stderr || '').trim()}`);
-  console.log(`The dashboard now runs in the background, and starts at login.
+  console.log(`${restart ? 'Restarted the dashboard in the background, with the current code.' : 'The dashboard now runs in the background, and starts at login.'}
 Open it with: cc-dashboard open
 Its log: ${logFile}`);
 }

@@ -98,6 +98,10 @@ cc-dashboard open
 
 `install` runs it in the background from now on, also after login (macOS); `cc-dashboard uninstall` stops that. You can also just run `cc-dashboard` in a terminal.
 
+- It runs the code of this checkout, with the `node` and the `PATH` you install it with. Run `cc-dashboard install` again after pulling new code, or after `gh auth refresh`: it restarts the installed dashboard.
+- `cc-dashboard install --port <n>` keeps that port; otherwise it uses `"dashboard": { "port" }` from the config, or 7341.
+- If `GH_TOKEN` or `GITHUB_TOKEN` is set when you install it, the token is stored in plain text in `~/Library/LaunchAgents/com.cyclopsmc.cc-dashboard.plist`. Without them, it asks `gh` for the token when it starts.
+
 The table has a row per mod and a column per MC version:
 
 - `N`: unreleased commits since the last release on that branch.

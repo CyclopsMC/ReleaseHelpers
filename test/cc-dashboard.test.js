@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { createSandbox } = require('./helpers');
 
 const BIN = path.join(__dirname, '..', 'bin');
@@ -313,4 +313,45 @@ test('installs and uninstalls a launchd agent', () => {
   assert.strictEqual(sb.run(path.join(BIN, 'cc-dashboard'), ['uninstall'], { env }).code, 0);
   assert.ok(!fs.existsSync(plist));
   assert.match(sb.read(log), new RegExp(`bootout gui/${uid}/com.cyclopsmc.cc-dashboard\n$`));
+});
+
+test('installing again restarts the installed dashboard, but not one started by hand', async () => {
+  const pidFile = sb.path('agent.pid');
+  // launchctl stand-in: print shows the pid of the installed dashboard, bootout stops it.
+  sb.write(sb.path('shims', 'launchctl'), `#!/bin/sh
+case "$1" in
+  print) [ -f '${pidFile}' ] && printf '\\tpid = %s\\n' "$(cat '${pidFile}')" ;;
+  bootout) [ -f '${pidFile}' ] && kill "$(cat '${pidFile}')" && rm '${pidFile}' ;;
+esac
+exit 0
+`);
+  fs.chmodSync(sb.path('shims', 'launchctl'), 0o755);
+  const env = { CC_HELPERS_LAUNCH_AGENTS: sb.path('agents') };
+  const install = args => new Promise(resolve => {
+    execFile(path.join(BIN, 'cc-dashboard'), ['install', ...args], { env: { ...sb.env, ...env } }, (error, stdout, stderr) => {
+      resolve({ code: error ? error.code : 0, out: stdout, err: stderr });
+    });
+  });
+  // A stand-in for a running dashboard. It's our own child, so it's gone as soon as it is stopped.
+  const running = spawn('sleep', ['60']);
+  const stopped = new Promise(resolve => running.on('exit', resolve));
+  const info = sb.path('state', 'dashboard.json');
+  sb.write(info, JSON.stringify({ pid: running.pid, port: 1, token: 't', configFile: sb.env.CC_HELPERS_CONFIG }));
+  try {
+    // Started by hand: left alone.
+    let r = await install([]);
+    assert.notStrictEqual(r.code, 0);
+    assert.match(r.err, /Stop the running dashboard first/);
+
+    // Run by launchd: stopped and started again, with the given port.
+    sb.write(pidFile, String(running.pid));
+    r = await install(['--port', '7999']);
+    assert.strictEqual(r.code, 0, r.err);
+    assert.match(r.out, /Restarted the dashboard in the background/);
+    await stopped;
+    assert.ok(sb.read(sb.path('agents', 'com.cyclopsmc.cc-dashboard.plist')).includes('<string>--port</string>\n    <string>7999</string>'));
+  } finally {
+    running.kill();
+    fs.rmSync(info, { force: true });
+  }
 });
