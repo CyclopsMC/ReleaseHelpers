@@ -467,3 +467,19 @@ main { padding: 20px 24px 40px; }
 .mini.releases .tag { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .mini.releases .pub { font-size: 12px; padding-left: 8px; width: 1%; white-space: nowrap; }
 .panel-head .platforms { display: flex; gap: 10px; font-size: 12.5px; margin-top: 2px; }
+
+/* Project boards */
+.board .column + .column { margin-top: 12px; }
+.board .colhead { display: flex; justify-content: space-between; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+.board .colhead.release { color: var(--release-fg); }
+.board .count { font-variant-numeric: tabular-nums; font-weight: 500; }
+.board .column > a { display: inline-block; font-size: 12px; margin-top: 4px; }
+.items, .board-items { list-style: none; margin: 0; padding: 0; }
+.items li, .board-items li { padding: 5px 0; font-size: 13px; }
+.items li + li, .board-items li + li { border-top: 1px solid var(--surface-2); }
+.items .title, .board-items .title { overflow-wrap: anywhere; }
+.items .meta, .board-items .meta { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 1px; }
+.items .status, .board-items .status { color: var(--text); font-weight: 500; }
+.items .unreleased, .board-items .unreleased { color: var(--release-fg); }
+.items .title a, .board-items .title a { color: var(--text); }
+.items .title a:hover, .board-items .title a:hover { color: var(--accent); }

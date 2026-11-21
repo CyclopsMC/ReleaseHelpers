@@ -151,6 +151,7 @@ function createDashboardServer(monitor, { token, log = () => {}, actions = {} })
       const kind = ['local', 'remote', 'full'].includes(body.kind) ? body.kind : 'remote';
       // remote and full also recompute every mod.
       const done = monitor.request(kind);
+      if (kind !== 'local') monitor.refreshProjects();
       if (body.wait) await done;
       return send(res, body.wait ? 200 : 202, { ok: true });
     }

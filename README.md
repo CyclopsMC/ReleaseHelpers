@@ -137,6 +137,18 @@ Next to the table (below it on narrow screens), cards show:
 
 The projects are the `curseforge_project_id` and `modrinth_project_id` in each mod's `gradle.properties`. CurseForge's own API needs a key, so the numbers come from [cfwidget](https://cfwidget.com/), like `cc-latest-curse` does, and from Modrinth's public API. They are fetched at start and every hour, a new release within a minute, and a release that may still be uploading again every 10 minutes, and kept in `~/.cache/cc-helpers/insights.json`. The mod panel links to the mod on CurseForge and Modrinth.
 
+With `dashboard.projects` set to GitHub project boards, a card per board shows above those:
+
+- Its open items per status column, the furthest along first, each with its mod and a link. Done items (the last status, or a closed issue) are only counted.
+- **Done, not released yet**: done items that a commit not released yet closes (`Closes #12`, or the `(#34)` of a merged pull request), with the versions still to release them on.
+- The panel of a mod lists its open items on the boards.
+
+```json
+"dashboard": { "projects": ["https://github.com/orgs/CyclopsMC/projects/3", "https://github.com/orgs/CyclopsMC/projects/4"] }
+```
+
+Boards are read every 10 minutes and on Refresh. The GitHub token needs the `read:project` scope, which `gh auth login` doesn't give by default: `gh auth refresh -s read:project`.
+
 It only answers on `127.0.0.1`, and only accepts changes from its own page. Its log is in `~/.cache/cc-helpers/dashboard.log`.
 
 Optional settings under `"dashboard"` in the config:
@@ -144,7 +156,7 @@ Optional settings under `"dashboard"` in the config:
   The first time, macOS asks whether node may control Terminal (or iTerm); allow it.
 - `ide`: a command to open a checkout, where `{dir}` is its path, e.g. `["idea", "{dir}"]` or `["open", "-a", "IntelliJ IDEA", "{dir}"]`. Without it, there is no IDE button.
 - `insights`: `false` to leave out the cards, so nothing is asked of CurseForge and Modrinth.
-- `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600), `fetchAllWithoutGitHub` (600) and `insightsInterval` (3600).
+- `port` (default 7341), and in seconds: `localInterval` (60), `remoteInterval` (120), `fetchAllInterval` (3600), `fetchAllWithoutGitHub` (600), `insightsInterval` (3600) and `projectsInterval` (600).
 
 `"github": false` at the top level of the config stops it from asking GitHub; it then fetches everything every 10 minutes.
 

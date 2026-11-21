@@ -519,6 +519,11 @@ function renderPanel() {
       content.push(h('div.note', null, `Older tags that differ from origin, which doesn't affect this status: ${cell.otherDifferingTags.join(', ')}.`));
     }
   }
+  const onBoards = state.projects && state.projects.perMod[mod.name];
+  if (onBoards && onBoards.length) {
+    content.push(h('div.section', null, h('h3', null, `On the project boards · ${onBoards.length}`, h('span.hint', null, 'all versions')),
+      h('ul.board-items', null, onBoards.map(i => boardItem({ ...i, mod: i.project }, { status: true })))));
+  }
   panel.replaceChildren(...content);
   panel.hidden = false;
   panel.scrollTop = scroll;
@@ -583,12 +588,50 @@ function platformLinks(name) {
   ];
 }
 
+// The column next to the table: project boards, then downloads and releases.
 function renderInsights() {
   const box = $('#insights');
-  const ins = state.insights;
-  $('#layout').classList.toggle('with-insights', !!ins);
-  box.hidden = !ins;
-  if (!ins) return;
+  const cards = [...(state.projects ? projectCards(state.projects) : []), ...(state.insights ? insightCards(state.insights) : [])];
+  $('#layout').classList.toggle('with-insights', cards.length > 0);
+  box.hidden = !cards.length;
+  box.replaceChildren(...cards);
+}
+
+const external = (href, ...children) => h('a', { href, target: '_blank', rel: 'noopener' }, ...children);
+const versionList = names => names.join(', ');
+
+// One project board item: its title, then the mod, number and whether its fix is released.
+function boardItem(i, { status = false } = {}) {
+  return h('li', null,
+    h('div.title', null, i.url ? external(i.url, i.title) : i.title),
+    h('div.meta', null,
+      status && i.status ? h('span.status', null, i.status) : null,
+      [i.mod, i.number ? `#${i.number}` : null, i.kind === 'pr' ? 'PR' : null, i.kind === 'draft' ? 'draft' : null].filter(Boolean).join(' '),
+      i.unreleased.length ? h('span.unreleased', { title: 'A commit that closes it is not released on these versions yet' }, `not released on ${versionList(i.unreleased)}`) : null));
+}
+
+function projectCards(p) {
+  if (!p.projects.length) {
+    return p.running ? [h('div.card', null, h('h3', null, 'Project boards'), h('div', null, h('span.spinner'), ' Asking GitHub…'))] : [];
+  }
+  return p.projects.map(b => {
+    if (b.error) {
+      return h('div.card', null, h('h3', null, 'Project board', h('span.src', null, b.spec)), h('p.note.warn', null, b.error));
+    }
+    return h('div.card.board', null,
+      h('h3', null, external(b.url, b.title), h('span.src', null, `${b.open} open`)),
+      b.columns.map(c => h('div.column', null,
+        h('div.colhead', null, c.name || 'No status', h('span.count', null, String(c.count))),
+        h('ul.items', null, c.items.map(i => boardItem(i))),
+        c.count > c.items.length ? external(b.url, `${c.count - c.items.length} more on the board`) : null)),
+      b.unreleased.length ? h('div.column', null,
+        h('div.colhead.release', null, 'Done, not released yet', h('span.count', null, String(b.unreleased.length))),
+        h('ul.items', null, b.unreleased.map(i => boardItem(i)))) : null,
+      h('p.note', null, `${b.done} done.`));
+  });
+}
+
+function insightCards(ins) {
   const cards = [];
   const dl = ins.downloads;
   if (!dl.mods.length) {
@@ -674,7 +717,7 @@ function renderInsights() {
       })),
       latestNote()));
   }
-  box.replaceChildren(...cards);
+  return cards;
 }
 
 function connect() {

@@ -15,6 +15,7 @@ const { stateDir } = require('./lock');
 const { gitOrNull, runPool } = require('./git');
 const { readPropsAt } = require('./props');
 const { fetchPlatforms, summarize, publishState } = require('./insights');
+const { parseProject, fetchProject, summarizeProjects } = require('./projects');
 const {
   discoverMods, checkVersionDirs, checkouts, computeStatus, planFetches, isUpmergeOnly, modWork, cellText, originUrl,
 } = require('./status');
@@ -29,6 +30,8 @@ const DEFAULTS = {
   fetchAllWithoutGitHub: 600,
   // Downloads and releases on CurseForge and Modrinth.
   insightsInterval: 3600,
+  // GitHub project boards.
+  projectsInterval: 600,
 };
 
 // A release the platform data doesn't know yet is looked up at once, but at most once a minute
@@ -98,6 +101,9 @@ class Monitor extends EventEmitter {
     // mod -> what CurseForge and Modrinth have, see insights.js.
     this.platforms = new Map();
     this.insightsRunning = false;
+    // [{ spec, data | null, error | null }] of the project boards in the config.
+    this.boards = [];
+    this.projectsRunning = false;
   }
 
   opt(name) {
@@ -125,6 +131,53 @@ class Monitor extends EventEmitter {
       this.refreshInsights();
       every(this.opt('insightsInterval'), () => this.refreshInsights());
     }
+    if (this.projectSpecs().length) {
+      this.refreshProjects();
+      every(this.opt('projectsInterval'), () => this.refreshProjects());
+    }
+  }
+
+  // The boards under dashboard.projects, as URLs or "owner/number".
+  projectSpecs() {
+    const specs = this.opt('projects');
+    return Array.isArray(specs) ? specs : [];
+  }
+
+  async refreshProjects() {
+    const specs = this.projectSpecs();
+    if (!specs.length || !this.config || this.config.github === false || this.projectsRunning) return;
+    this.projectsRunning = true;
+    this.changed();
+    const boards = [];
+    for (const spec of specs) {
+      const project = parseProject(spec);
+      if (!project) {
+        boards.push({ spec, data: null, error: `Not a project board: ${spec}` });
+        continue;
+      }
+      try {
+        boards.push({ spec, data: await fetchProject(project), error: null });
+      } catch (e) {
+        boards.push({ spec, data: null, error: e.message });
+      }
+    }
+    this.boards = boards;
+    this.projectsRunning = false;
+    this.changed();
+  }
+
+  projectsSnapshot() {
+    if (!this.projectSpecs().length || !this.config || this.config.github === false) return null;
+    const versions = this.config.versions;
+    const mods = this.found.mods.map(name => ({
+      name,
+      repo: this.githubOf(name),
+      unreleased: (this.status[name] || []).map((c, i) => ({
+        version: versions[i] ? versions[i].name : String(i),
+        commits: [...(c && c.unreleased ? c.unreleased.userFacing : []), ...(c && c.pending ? c.pending.userFacing : [])],
+      })),
+    }));
+    return { running: this.projectsRunning, ...summarizeProjects(this.boards, mods) };
   }
 
   stop() {
@@ -495,6 +548,7 @@ class Monitor extends EventEmitter {
       refresh: { running: this.busy, ...this.info },
       features: { terminal: !!dashboard.terminal || process.platform === 'darwin', ide: Array.isArray(dashboard.ide) },
       insights: this.insightsSnapshot(),
+      projects: this.projectsSnapshot(),
     };
   }
 

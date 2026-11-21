@@ -118,4 +118,19 @@ async function remoteRefs(repos, token = githubToken(), { health = false } = {})
   return result;
 }
 
-module.exports = { githubRepo, githubToken, remoteRefs, repoQuery };
+// Runs one GraphQL query; throws with GitHub's message if it sends no data. A token without the
+// scope the query needs gets an error that says how to add it.
+async function graphql(query, variables = {}, token = githubToken()) {
+  if (!token) throw new Error('No GitHub token: run gh auth login, or set GH_TOKEN.');
+  const json = await post(apiUrl(), token, { query, variables });
+  const errors = json.errors || [];
+  const scope = errors.find(e => e.type === 'INSUFFICIENT_SCOPES');
+  if (scope) {
+    const needs = /\['([^']+)'/.exec(scope.message);
+    throw new Error(`The GitHub token lacks the ${needs ? needs[1] : 'needed'} scope: run gh auth refresh -s ${needs ? needs[1] : 'read:project'}.`);
+  }
+  if (!json.data || errors.length) throw new Error((errors[0] && errors[0].message) || 'GitHub sent no data');
+  return json.data;
+}
+
+module.exports = { githubRepo, githubToken, graphql, remoteRefs, repoQuery };
