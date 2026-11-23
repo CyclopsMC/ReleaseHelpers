@@ -45,4 +45,28 @@ function cyclopsVersion(props) {
   return v ? v.replace(/-[^-]*$/, '') : '';
 }
 
-module.exports = { parseProps, propsFileName, readWorkingProps, readPropsAt, cyclopsVersion };
+// The property that names a dependency on `mod`, as in EvilCraft-Compat -> evilcraftcompat_version.
+const depKey = mod => `${mod.toLowerCase().replace(/[^a-z0-9]/g, '')}_version`;
+
+// What changed from `before` to `after`: [{ key, from, to }], with `from` null for a new key.
+// mod_version is left out, as each version has its own.
+function changedProps(before, after) {
+  return Object.keys(after)
+    .filter(k => k !== 'mod_version' && before[k] !== after[k])
+    .map(k => ({ key: k, from: k in before ? before[k] : null, to: after[k] }));
+}
+
+// `current` with the version at its end replaced, keeping what comes before it, as the
+// "26.1.2-neoforge:" of "26.1.2-neoforge:1.1.0-182".
+function withVersion(current, version) {
+  const m = /\d+(?:\.\d+)*-\d+$/.exec(current);
+  return m ? current.slice(0, m.index) + version : version;
+}
+
+// The text of a properties file with `key` set to `value`; unchanged if it has no `key`.
+function setProp(text, key, value) {
+  const re = new RegExp(`^(\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[=:]\\s*)[^\\r\\n]*`, 'm');
+  return text.replace(re, (line, lead) => lead + value);
+}
+
+module.exports = { parseProps, propsFileName, readWorkingProps, readPropsAt, cyclopsVersion, depKey, changedProps, withVersion, setProp };

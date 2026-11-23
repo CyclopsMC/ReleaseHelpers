@@ -13,6 +13,7 @@ const RECENT_TAGS = 10;
 const ACTIONS_APP_ID = 15368;
 const SUITE_PAGES = 5;
 const ACTIONS_CACHE_MS = 10 * 60000;
+const BUILD_COMMITS = 5;
 
 function apiUrl() {
   return process.env.CC_HELPERS_GITHUB_API || 'https://api.github.com/graphql';
@@ -224,6 +225,50 @@ async function remoteRefs(repos, token = githubToken(), { health = false } = {})
   return result;
 }
 
+// The newest commits of a branch, with the GitHub Actions runs their pushes started, and the steps
+// of those runs.
+function buildsQuery({ owner, name, branch }) {
+  return `query {
+  repository(owner: ${str(owner)}, name: ${str(name)}) {
+    ref(qualifiedName: ${str(`refs/heads/${branch}`)}) { target { ... on Commit {
+      history(first: ${BUILD_COMMITS}) { nodes { oid
+        checkSuites(first: 50, filterBy: {appId: ${ACTIONS_APP_ID}}) { nodes {
+          status conclusion
+          workflowRun { runNumber event workflow { name } }
+          checkRuns(first: 5) { nodes { steps(first: 40) { nodes { name conclusion } } } }
+        } }
+      } }
+    } } }
+  }
+}`;
+}
+
+// What the pushes of a commit built: { running, build }. `build` is the number of a run that
+// published to Maven, by a successful step named like "Deploy to Maven", or without such a step,
+// a successful run of the CI workflow; null if none did.
+function commitBuild(suites) {
+  const pushes = suites.filter(s => s.workflowRun && s.workflowRun.event === 'push');
+  const published = pushes.filter(s => {
+    const steps = (s.checkRuns ? s.checkRuns.nodes : []).flatMap(r => (r.steps ? r.steps.nodes : []));
+    const maven = steps.filter(st => /maven/i.test(st.name));
+    // A CI that skips publishing, e.g. for "Bump mod version" commits, skips that step.
+    if (maven.length) return maven.some(st => st.conclusion === 'SUCCESS');
+    return s.conclusion === 'SUCCESS' && !!s.workflowRun.workflow && s.workflowRun.workflow.name === 'CI';
+  }).map(s => s.workflowRun.runNumber);
+  return {
+    running: pushes.some(s => s.status !== 'COMPLETED'),
+    build: published.length ? Math.max(...published) : null,
+  };
+}
+
+// The newest commits of a branch, newest first: [{ oid, running, build }], see commitBuild.
+async function branchBuilds(repo, token = githubToken()) {
+  const data = await graphql(buildsQuery(repo), {}, token);
+  const ref = data.repository && data.repository.ref;
+  if (!ref) throw new Error(`${repo.owner}/${repo.name} has no branch ${repo.branch}`);
+  return ref.target.history.nodes.map(n => ({ oid: n.oid, ...commitBuild(n.checkSuites.nodes) }));
+}
+
 // Runs one GraphQL query; throws with GitHub's message if it sends no data. A token without the
 // scope the query needs gets an error that says how to add it.
 async function graphql(query, variables = {}, token = githubToken()) {
@@ -239,4 +284,4 @@ async function graphql(query, variables = {}, token = githubToken()) {
   return json.data;
 }
 
-module.exports = { githubRepo, githubToken, graphql, remoteRefs, repoQuery, suitesQuery, actionsState };
+module.exports = { githubRepo, githubToken, graphql, remoteRefs, repoQuery, suitesQuery, actionsState, buildsQuery, commitBuild, branchBuilds };
