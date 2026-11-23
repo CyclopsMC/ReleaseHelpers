@@ -224,9 +224,6 @@ It first shows the chain and asks to start, then does this for each version, in 
 
 1. **Sync**: checks the branch, fetches, and fast-forwards. Unpushed local commits are only released after you confirm.
 2. **Upmerge** from the version below (`cc-upmerge`). On conflicts, it starts `claude upmerge`; exit Claude when it's done.
-   `gradle.properties` keeps this version's own values on upmerges (`merge=ours` in `.gitattributes`), so what the version below changed there would be lost. The chain carries it over, into the upmerge commit:
-   - **Dependencies on other mods** (a `<mod>_version` property, e.g. `evilcraftcompat_version` for EvilCraft-Compat): it proposes that mod's newest Maven build for this version, keeping the format of this version's value (e.g. `26.1.2-neoforge:` before it). The build is the `mod_version` and CI run number of the newest commit on that mod's branch whose push run succeeded at a step with "Maven" in its name (without such a step, a successful `CI` run). This needs a GitHub token. It warns when CI is still running there, or when that build doesn't have everything of the version below yet (upmerge that mod first). You can also type a value, recheck, or skip.
-   - **Other properties**, like `jei_version`: it lists them, and you can edit `gradle.properties` before continuing.
 3. **Build** with the version's `gradleOpts`, logging to `.git/cc-release-chain/build.log`.
    If it fails, it shows the end of the log and lets you retry, ask Claude to fix it, skip the build, or abort.
 4. **Review**: after a clean upmerge, Claude reviews it headless, with its output in magenta. If Claude changed files, you see the diff and choose to commit them (then it builds again) or revert them.
@@ -242,7 +239,7 @@ Options:
 
 Versions without a release on their MC version yet (e.g. a new MC version) only get the upmerge pushed, and so do versions where nothing user-facing changed, and mods without any release (like the compat mods). At the end, it prints a summary per version.
 
-You can stop at any prompt (or with Ctrl-C) and run the same command again to continue: the upmerge, the carried-over properties, a passed build, a review and your edited draft are kept.
+You can stop at any prompt (or with Ctrl-C) and run the same command again to continue: the upmerge, a passed build, a review and your edited draft are kept.
 
 ### Rehearsals
 
