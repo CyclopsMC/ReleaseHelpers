@@ -5,7 +5,10 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { createSandbox } = require('./helpers');
+const { commitBuild } = require('../bin/lib/github');
+const { withVersion, setProp, depKey, changedProps } = require('../bin/lib/props');
 
 const HEADER = "As always, don't forget to backup your world before updating!\n\n";
 const props = (mc, mod) => `mod_version=${mod}\nminecraft_version=${mc}\n`;
@@ -320,6 +323,151 @@ test('only upmerges a mod without releases, like a compat mod', () => {
   assert.ok(!log().includes('edit '), 'no changelog to edit');
   assert.ok(!r.out.includes('== ModA 1.20-lts'), 'nothing to do on the lowest version');
   assert.match(r.out, /1\.21-lts {2}upmerge pushed \(this mod is only upmerged, it has no releases\), build ok, review: no changes\n/);
+});
+
+// Stand-in for GitHub's GraphQL API, in its own process as the chain runs synchronously: answers
+// for the commits of a branch from a JSON file ({ branch: [commit] }), and logs the queries.
+const GITHUB = `const fs = require('fs');
+const file = process.argv[2];
+require('http').createServer((req, res) => {
+  let body = '';
+  req.on('data', d => { body += d; });
+  req.on('end', () => {
+    const { query } = JSON.parse(body);
+    fs.appendFileSync(file + '.log', query + '\\n');
+    const branch = /refs\\/heads\\/([^"]+)/.exec(query)[1];
+    const nodes = JSON.parse(fs.readFileSync(file, 'utf8'))[branch] || [];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: { repository: { ref: { target: { history: { nodes } } } } } }));
+  });
+}).listen(0, '127.0.0.1', function () { console.log(this.address().port); });
+`;
+
+async function startGithub(builds) {
+  const file = sb.path('github.json');
+  sb.write(file, JSON.stringify(builds));
+  sb.write(sb.path('github.js'), GITHUB);
+  const child = spawn(process.execPath, [sb.path('github.js'), file], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const port = await new Promise((resolve, reject) => {
+    child.stdout.once('data', d => resolve(Number(String(d).trim())));
+    child.once('error', reject);
+  });
+  return {
+    stop: () => child.kill(),
+    env: { GH_TOKEN: 'secret', CC_HELPERS_GITHUB_API: `http://127.0.0.1:${port}/graphql` },
+    queries: () => (fs.existsSync(`${file}.log`) ? sb.read(`${file}.log`) : ''),
+  };
+}
+
+// A push run of CI, with its Maven step.
+const ciRun = (runNumber, maven = 'SUCCESS', status = 'COMPLETED') => ({
+  status,
+  conclusion: status === 'COMPLETED' ? 'SUCCESS' : null,
+  workflowRun: { runNumber, event: 'push', workflow: { name: 'CI' } },
+  checkRuns: { nodes: [{ steps: { nodes: [{ name: 'Build', conclusion: 'SUCCESS' }, { name: 'Deploy to Maven', conclusion: maven }] } }] },
+});
+
+// ModA (without releases) depends on Mod-Compat, which gets a Maven build on every push. On 1.20,
+// a compat bump moves ModA to a newer build of Mod-Compat, and also to a newer JEI.
+// `compatUpmerged`: Mod-Compat's 1.21 has what its 1.20 has.
+function setupCompat({ compatUpmerged = true } = {}) {
+  setup({ releases: false });
+  fs.appendFileSync(sb.env.GIT_CONFIG_GLOBAL, `[url "${sb.path('origin')}/"]\n\tinsteadOf = https://github.com/Test/\n`);
+  const c = sb.newMod('Mod-Compat');
+  sb.git(c, 'checkout', '-q', '-b', 'master-1.20-lts');
+  sb.commit(c, 'Initial', { 'gradle.properties': props('1.20.1', '1.0.0'), 'src/main/java/C.java': 'c\n' });
+  sb.git(c, 'checkout', '-q', '-b', 'master-1.21-lts');
+  sb.commit(c, 'Port to 1.21', { 'gradle.properties': props('1.21.1', '1.0.0') });
+  sb.git(c, 'checkout', '-q', 'master-1.20-lts');
+  sb.commit(c, 'Fix fluid dupe', { 'src/main/java/C.java': 'c-fixed\n' });
+  if (compatUpmerged) {
+    sb.git(c, 'checkout', '-q', 'master-1.21-lts');
+    sb.git(c, 'merge', '-q', '--no-edit', 'master-1.20-lts');
+  }
+  sb.git(c, 'push', '-q', 'origin', 'master-1.20-lts', 'master-1.21-lts');
+  for (const [dir, branch] of [['mc20-lts', 'master-1.20-lts'], ['mc21-lts', 'master-1.21-lts']]) {
+    sb.git(sb.dir, 'clone', '-q', '-b', branch, 'https://github.com/Test/Mod-Compat.git', sb.path(dir, 'Mod-Compat'));
+  }
+
+  const a = sb.path('work', 'ModA');
+  const deps = (compat, jei) => `modcompat_version=${compat}\njei_version=${jei}\n`;
+  sb.git(a, 'checkout', '-q', 'master-1.20-lts');
+  sb.commit(a, 'Use Mod-Compat', { 'gradle.properties': props('1.20.1', '1.0.0') + deps('1.20.1-1.0.0-10', '15.1') });
+  sb.git(a, 'checkout', '-q', 'master-1.21-lts');
+  sb.git(a, 'merge', '-q', '--no-edit', 'master-1.20-lts');
+  sb.commit(a, 'Use Mod-Compat on 1.21', { 'gradle.properties': props('1.21.1', '2.0.0') + deps('1.21.1-neoforge:1.0.0-11', '19.5') });
+  sb.git(a, 'checkout', '-q', 'master-1.20-lts');
+  sb.commit(a, 'Bump compat version\n\n* Fix fluid dupe', { 'gradle.properties': props('1.20.1', '1.0.0') + deps('1.20.1-1.0.0-12', '15.2') });
+  sb.git(a, 'push', '-q', 'origin', 'master-1.20-lts', 'master-1.21-lts');
+  return sb.git(c, 'rev-parse', 'origin/master-1.21-lts').trim();
+}
+
+const originProps = branch => sb.git(sb.path('origin', 'ModA.git'), 'show', `${branch}:gradle.properties`);
+
+test("sets a dependency that the version below updated to this version's own build of it", async () => {
+  const compatHead = setupCompat();
+  const github = await startGithub({
+    'master-1.21-lts': [{ oid: compatHead, checkSuites: { nodes: [ciRun(13)] } }],
+  });
+  try {
+    // Start, set Mod-Compat's build (default), continue without JEI (default), push the upmerge.
+    const r = chain(['ModA'], 'y\n\n\n\n', github.env);
+    assert.strictEqual(r.code, 0, r.out + r.err);
+    assert.match(r.out, /origin\/master-1\.20-lts updated Mod-Compat: modcompat_version 1\.20\.1-1\.0\.0-10 -> 1\.20\.1-1\.0\.0-12\./);
+    assert.match(r.out, /The newest build of Mod-Compat for master-1\.21-lts is 1\.0\.0-13 \(/);
+    assert.match(github.queries(), /repository\(owner: "Test", name: "Mod-Compat"\)/);
+    // The format of this version stays; other changes are shown, not carried over.
+    assert.strictEqual(originProps('master-1.21-lts'), props('1.21.1', '2.0.0') + 'modcompat_version=1.21.1-neoforge:1.0.0-13\njei_version=19.5\n');
+    assert.match(r.out, /\n {2}jei_version: 15\.1 -> 15\.2\n/);
+    // In the upmerge commit itself, which the review is told about.
+    const mc21 = sb.path('mc21-lts', 'ModA');
+    assert.strictEqual(sb.git(mc21, 'log', '-1', '--format=%P').trim().split(' ').length, 2);
+    assert.match(sb.git(mc21, 'log', '-1', '--format=%s'), /^Merge /);
+    assert.match(log(), /The chain set modcompat_version to 1\.21\.1-neoforge:1\.0\.0-13, the builds for this version of the dependencies that origin\/master-1\.20-lts updated\./);
+    assert.match(log(), /origin\/master-1\.20-lts also changed jei_version \(15\.1 -> 15\.2\), which were not carried over/);
+    assert.match(r.out, /1\.21-lts {2}upmerge pushed \(.*\), set modcompat_version 1\.21\.1-neoforge:1\.0\.0-13, build ok/);
+  } finally {
+    github.stop();
+  }
+});
+
+test("warns when the dependency's build doesn't have the upmerge yet, and takes a typed value", async () => {
+  const compatHead = setupCompat({ compatUpmerged: false });
+  const github = await startGithub({
+    'master-1.21-lts': [{ oid: compatHead, checkSuites: { nodes: [ciRun(11)] } }],
+  });
+  try {
+    // Start, enter a value, continue without JEI, push the upmerge.
+    const r = chain(['ModA'], 'y\ne\n1.21.1-neoforge:1.0.0-20\n\n\n', github.env);
+    assert.strictEqual(r.code, 0, r.out + r.err);
+    assert.match(r.out, /That build doesn't have everything of Mod-Compat on master-1\.20-lts yet: upmerge Mod-Compat first/);
+    // The newest build is the one it has: nothing to say yes to.
+    assert.match(r.out, /modcompat_version on master-1\.21-lts is 1\.21\.1-neoforge:1\.0\.0-11\. \[e\]nter a value \/ \[r\]echeck .*\(default: r\)/);
+    assert.match(originProps('master-1.21-lts'), /^modcompat_version=1\.21\.1-neoforge:1\.0\.0-20$/m);
+  } finally {
+    github.stop();
+  }
+});
+
+test('tells which CI run published a build', () => {
+  const scheduled = { ...ciRun(14), workflowRun: { runNumber: 14, event: 'schedule', workflow: { name: 'Crowdin' } } };
+  assert.deepStrictEqual(commitBuild([ciRun(13), scheduled]), { running: false, build: 13 });
+  // A CI that skips publishing, as for "Bump mod version" commits.
+  assert.deepStrictEqual(commitBuild([ciRun(13, 'SKIPPED')]), { running: false, build: null });
+  assert.deepStrictEqual(commitBuild([ciRun(15, null, 'IN_PROGRESS')]), { running: true, build: null });
+  // Without a Maven step: a successful CI run.
+  const plain = { ...ciRun(16), checkRuns: { nodes: [{ steps: { nodes: [{ name: 'Build', conclusion: 'SUCCESS' }] } }] } };
+  assert.deepStrictEqual(commitBuild([plain]), { running: false, build: 16 });
+});
+
+test('reads and writes the properties that name dependencies', () => {
+  assert.strictEqual(depKey('EvilCraft-Compat'), 'evilcraftcompat_version');
+  assert.strictEqual(withVersion('26.1.2-neoforge:1.1.0-182', '1.1.0-190'), '26.1.2-neoforge:1.1.0-190');
+  assert.strictEqual(withVersion('1.20.1-1.1.0-180', '1.1.0-190'), '1.20.1-1.1.0-190');
+  assert.strictEqual(withVersion('1.1.0-181', '1.1.0-190'), '1.1.0-190');
+  assert.strictEqual(setProp('a=1\r\nb_version = 1.0-2\r\n', 'b_version', '1.0-$1'), 'a=1\r\nb_version = 1.0-$1\r\n');
+  assert.deepStrictEqual(changedProps({ mod_version: '1', a: 'x', b: 'y' }, { mod_version: '2', a: 'x', b: 'z', c: 'n' }),
+    [{ key: 'b', from: 'y', to: 'z' }, { key: 'c', from: null, to: 'n' }]);
 });
 
 test('refuses to start when a release tag differs from origin', () => {

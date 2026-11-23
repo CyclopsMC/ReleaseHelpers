@@ -8,9 +8,10 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { loadConfig } = require('./lib/config');
 const { git, gitOrNull } = require('./lib/git');
-const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing, isUpmergeOnly } = require('./lib/status');
+const { discoverMods, checkVersionDirs, cellStatus, cellUserFacing, isUpmergeOnly, originUrl } = require('./lib/status');
 const { listCommits, partition, withBranch } = require('./lib/commits');
-const { readWorkingProps, readPropsAt, cyclopsVersion } = require('./lib/props');
+const { readWorkingProps, readPropsAt, cyclopsVersion, propsFileName, depKey, changedProps, withVersion, setProp } = require('./lib/props');
+const { githubRepo, githubToken, branchBuilds } = require('./lib/github');
 const { draftChangelog, finalizeChangelog, suggestBump } = require('./lib/changelog');
 const { runBuild, buildEnv, buildEnabled, buildCommand } = require('./lib/build');
 const { tryLock, modLockDir, modLockOwner, acquireBuildSlot } = require('./lib/lock');
@@ -21,8 +22,9 @@ const { createRehearsal, rehearsalResults } = require('./lib/rehearsal');
 const HELP = `Usage: cc-release-chain [options] <mod> [version]
 
 Releases a mod on an MC version and all higher maintained ones, one version at a time:
-sync with origin, upmerge from the version below, build, let Claude review a clean upmerge,
-edit the drafted changelog, choose the version bump, and run cc-release.
+sync with origin, upmerge from the version below, carry over the dependency updates that
+gradle.properties left out, build, let Claude review a clean upmerge, edit the drafted changelog,
+choose the version bump, and run cc-release.
 
 Without a version, the chain starts at the lowest version with unreleased changes.
 It can be stopped at any prompt and run again to continue where it left off.
@@ -240,6 +242,11 @@ async function upmerge(ctx) {
     return state.upmerge || 'already';
   }
   console.log(`Upmerging origin/${ctx.src} into ${version.branch}...`);
+  // For carryProps: what origin/src has new since the last upmerge.
+  const base = await gitOrNull(repo, ['merge-base', 'HEAD', `refs/remotes/origin/${ctx.src}`]);
+  state.upmergeFrom = base ? { base: base.trim(), head: (await git(repo, ['rev-parse', `refs/remotes/origin/${ctx.src}`])).trim() } : null;
+  delete state.carried;
+  saveState(ctx);
   const code = run('cc-upmerge', [], { cwd: repo });
   if (code !== 0) {
     if (!(await hasConflicts(repo))) throw new Abort('cc-upmerge failed');
@@ -250,6 +257,126 @@ async function upmerge(ctx) {
   }
   saveState(ctx);
   return state.upmerge;
+}
+
+// The newest build of `dep` for this version: { version, oid, warnings }, without a version if
+// there is none to propose.
+async function depBuild(ctx, dep) {
+  const { version, lower, src, depFound } = ctx;
+  if (!depFound.byVersion[version.index].has(dep)) return { warnings: [`There is no checkout of ${dep} for ${version.name} to look up its builds.`] };
+  const depRepo = path.join(version.realDir || version.dir, dep);
+  const remote = githubRepo(originUrl(depRepo));
+  if (!remote) return { warnings: [`The origin of ${dep} is not on GitHub, so its builds can't be looked up.`] };
+  const token = githubToken();
+  if (!token) return { warnings: ['There is no GitHub token to look up builds: run gh auth login, or set GH_TOKEN.'] };
+  let builds;
+  try {
+    builds = await branchBuilds({ ...remote, branch: version.branch }, token);
+  } catch (e) {
+    return { warnings: [`Can't look up the builds of ${dep}: ${e.message}`] };
+  }
+  const warnings = [];
+  if (builds.length && builds[0].running) warnings.push(`CI is still running on the newest commit of ${dep} on ${version.branch}.`);
+  const built = builds.find(b => b.build !== null);
+  if (!built) return { warnings: [...warnings, `None of the last ${builds.length} commits of ${dep} on ${version.branch} published a build.`] };
+  await gitOrNull(depRepo, ['fetch', '--quiet', 'origin', `+refs/heads/${version.branch}:refs/remotes/origin/${version.branch}`]);
+  const props = await readPropsAt(depRepo, built.oid);
+  if (!props.mod_version) return { warnings: [...warnings, `Can't read the mod_version of ${dep} at ${built.oid.slice(0, 7)}.`] };
+  // The update came from origin/src, so the build should have what dep has there.
+  if (lower && depFound.byVersion[lower.index].has(dep)) {
+    await gitOrNull(depRepo, ['fetch', '--quiet', 'origin', `+refs/heads/${src}:refs/remotes/origin/${src}`]);
+    if ((await gitOrNull(depRepo, ['merge-base', '--is-ancestor', `refs/remotes/origin/${src}`, built.oid])) === null) {
+      warnings.push(`That build doesn't have everything of ${dep} on ${src} yet: upmerge ${dep} first (cc-release-chain ${dep}), and recheck when its CI is done.`);
+    }
+  }
+  return { version: `${props.mod_version}-${built.build}`, oid: built.oid, warnings };
+}
+
+// This version's value for a dependency that origin/src updated, or null to leave it.
+async function chooseDepValue(ctx, dep, change, current) {
+  const { version, src, ui } = ctx;
+  step(ctx, `updating ${dep}`);
+  console.log(`origin/${src} updated ${dep}: ${change.key} ${change.from === null ? '(new)' : change.from} -> ${change.to}.`);
+  for (;;) {
+    const found = await depBuild(ctx, dep);
+    const value = found.version ? withVersion(current, found.version) : null;
+    if (found.version) console.log(`The newest build of ${dep} for ${version.branch} is ${found.version} (${found.oid.slice(0, 7)}).`);
+    for (const w of found.warnings) console.log(c.yellow(`  ${w}`));
+    if (value === current && !found.warnings.length) {
+      console.log(`${change.key} on ${version.branch} already has it.`);
+      return current;
+    }
+    const choices = value && value !== current ? [{ key: 'y', label: `[y]es, set it to ${value}`, value: 'yes' }] : [];
+    choices.push(
+      { key: 'e', label: '[e]nter a value', value: 'enter' },
+      { key: 'r', label: '[r]echeck', value: 'recheck' },
+      { key: 's', label: '[s]kip', value: 'skip' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    );
+    let def = 'enter';
+    if (found.warnings.length && found.version) def = 'recheck';
+    else if (choices[0].value === 'yes') def = 'yes';
+    const answer = await ui.choose(`${change.key} on ${version.branch} is ${current}.`, choices, def);
+    if (answer === 'yes') return value;
+    if (answer === 'enter') return ui.input(change.key, value || current);
+    if (answer === 'skip') return null;
+    if (answer === 'abort') throw new Abort(`Stopped to update ${dep} first`);
+  }
+}
+
+// gradle.properties keeps this branch's own values on upmerges (merge=ours in .gitattributes), so
+// what origin/src changed there is left out. Dependencies on other mods get this version's own
+// builds of them; other changes are shown, to carry over by hand. Goes into the upmerge commit.
+async function carryProps(ctx) {
+  const { repo, version, ui, state, src, mod, depFound, result } = ctx;
+  const changes = changedProps(await readPropsAt(repo, state.upmergeFrom.base), await readPropsAt(repo, state.upmergeFrom.head));
+  const file = path.join(repo, propsFileName(repo));
+  const name = path.basename(file);
+  const here = readWorkingProps(repo);
+  const deps = new Map(depFound.mods.filter(m => m !== mod).map(m => [depKey(m), m]));
+  const carry = { set: [], skipped: [], left: [] };
+  for (const change of changes) {
+    if (here[change.key] === change.to) continue;
+    const dep = deps.get(change.key);
+    if (!dep || !(change.key in here)) {
+      carry.left.push(change);
+      continue;
+    }
+    const value = await chooseDepValue(ctx, dep, change, here[change.key]);
+    if (value === null) {
+      carry.skipped.push(change);
+      continue;
+    }
+    if (value === here[change.key]) continue;
+    fs.writeFileSync(file, setProp(fs.readFileSync(file, 'utf8'), change.key, value));
+    carry.set.push({ key: change.key, from: here[change.key], to: value });
+  }
+  if (carry.left.length) {
+    step(ctx, `checking ${name}`);
+    console.log(c.yellow(`origin/${src} also changed these, which the upmerge left out, as ${name} keeps the values of ${version.branch}:`));
+    for (const l of carry.left) console.log(`  ${l.key}: ${l.from === null ? '(new)' : l.from} -> ${l.to}`);
+    const answer = await ui.choose('Does this version need its own update of them?', [
+      { key: 'c', label: '[c]ontinue without them', value: 'continue' },
+      { key: 'e', label: `[e]dit ${name}`, value: 'edit' },
+      { key: 'a', label: '[a]bort', value: 'abort' },
+    ], 'continue');
+    if (answer === 'abort') throw new Abort(`Stopped to update ${name} by hand`);
+    if (answer === 'edit') openEditor(ctx, file, name);
+  }
+  if ((await gitOrNull(repo, ['diff', '--quiet', '--', file])) === null) {
+    await git(repo, ['add', '--', file]);
+    const merge = (await gitOrNull(repo, ['rev-parse', '-q', '--verify', 'HEAD^2'])) !== null;
+    const pushed = (await gitOrNull(repo, ['merge-base', '--is-ancestor', 'HEAD', `refs/remotes/origin/${version.branch}`])) !== null;
+    if (merge && !pushed) {
+      await git(repo, ['commit', '--quiet', '--amend', '--no-edit']);
+      console.log(`Added the changes to ${name} to the upmerge commit.`);
+    } else {
+      await git(repo, ['commit', '--quiet', '-m', `Update ${name} after upmerging ${src}`]);
+    }
+  }
+  if (carry.set.length) result.carried = carry.set.map(x => `${x.key} ${x.to}`).join(', ');
+  state.carried = carry;
+  saveState(ctx);
 }
 
 async function commitChanges(ctx, what, defaultMessage) {
@@ -318,12 +445,25 @@ async function buildUntilOk(ctx) {
   }
 }
 
+// For the review: what carryProps did with the gradle.properties changes of origin/src.
+function propsContext(ctx) {
+  const carry = ctx.state.carried;
+  if (!carry) return '';
+  const list = changes => changes.map(x => `${x.key} (${x.from === null ? 'new' : x.from} -> ${x.to})`).join(', ');
+  let text = `gradle.properties keeps the values of ${ctx.version.branch} on upmerges. `;
+  if (carry.set.length) text += `The chain set ${carry.set.map(x => `${x.key} to ${x.to}`).join(', ')}, the builds for this version of the dependencies that origin/${ctx.src} updated. `;
+  const other = [...carry.skipped, ...carry.left];
+  if (other.length) text += `origin/${ctx.src} also changed ${list(other)}, which were not carried over; say in your verdict if this version needs its own update of them. `;
+  return carry.set.length || other.length ? text : '';
+}
+
 async function review(ctx) {
   const { repo, version, config, ui, state, result } = ctx;
   const cmd = (config.claude && config.claude.review) || DEFAULT_REVIEW_COMMAND;
   const prompt = `${(config.claude && config.claude.reviewPrompt) || DEFAULT_REVIEW_PROMPT}\n\n`
     + `Context from cc-release-chain: the last commit merges origin/${ctx.src} into ${version.branch}. `
     + `${result.build === 'ok' ? `The build (${buildCommand(config).join(' ')}) passed after the merge. ` : ''}`
+    + propsContext(ctx)
     + 'GRADLE_OPTS is already set for this Minecraft version, so run Gradle as usual and '
     + "don't change gradle.properties or ~/.gradle/gradle.properties. End with a one-line verdict.";
   for (;;) {
@@ -376,10 +516,10 @@ async function buildAndReview(ctx, merged) {
   }
 }
 
-function openEditor(ctx, file) {
+function openEditor(ctx, file, what = 'the changelog') {
   const editor = ctx.config.editor || process.env.VISUAL || process.env.EDITOR || 'vi';
   // Through sh, so editors with arguments work ("code --wait").
-  const code = runWaiting(ctx, 'your editor, for the changelog', 'sh', ['-c', `${editor} "$1"`, 'sh', file]);
+  const code = runWaiting(ctx, `your editor, for ${what}`, 'sh', ['-c', `${editor} "$1"`, 'sh', file]);
   if (code !== 0) console.log(c.yellow(`The editor exited with code ${code}.`));
 }
 
@@ -462,7 +602,7 @@ async function checkDependencies(ctx) {
     const props = readWorkingProps(repo);
     const warnings = [];
     for (const other of depFound.byVersion[version.index]) {
-      if (other === mod || !(`${other.toLowerCase()}_version` in props)) continue;
+      if (other === mod || !(depKey(other) in props)) continue;
       const pid = modLockOwner(other);
       if (pid) {
         warnings.push(`a release chain for ${other} is running (pid ${pid})`);
@@ -572,6 +712,7 @@ async function releaseVersion(ctx) {
   await sync(ctx);
   if (await pushUnpushedTag(ctx)) return;
   const merged = await upmerge(ctx);
+  if ((merged === 'clean' || merged === 'conflict') && ctx.state.upmergeFrom && !ctx.state.carried) await carryProps(ctx);
   await buildAndReview(ctx, merged);
   if (ctx.upmergeOnly) {
     await pushUpmerge(ctx, 'this mod is only upmerged, it has no releases');
@@ -758,6 +899,7 @@ async function main() {
       const w = Math.max(...results.map(r => r.name.length));
       for (const r of results) {
         const parts = [r.release ? (r.bump ? `released ${r.release} (${r.bump})` : r.release) : 'not finished'];
+        if (r.carried) parts.push(`set ${r.carried}`);
         if (r.build) parts.push(`build ${r.build}`);
         if (r.review) parts.push(`review: ${r.review}`);
         console.log(`  ${r.name.padEnd(w)}  ${parts.join(', ')}`);
